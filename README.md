@@ -4,6 +4,7 @@ A central long-term notebook for AI agents and the person using them. Anything a
 client saves (a recipe, a discovery, a dead end) can be found later from any other client, or
 browsed by you. One SQLite file, three front doors over the same logic:
 
+
 | Door | Path | For |
 |---|---|---|
 | MCP (streamable HTTP) | `/mcp` | Claude chat, Claude Code and other code assistants, any MCP client |
