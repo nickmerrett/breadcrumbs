@@ -1,0 +1,4 @@
+fastapi
+uvicorn
+mcp<2
+python-multipart

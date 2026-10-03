@@ -1,0 +1,14 @@
+# Run locally with docker compose up -d
+# For production, deploy the image to OpenShift and set BREADCRUMBS_PUBLIC_URL to the route URL.
+services:
+  breadcrumbs:
+    build: .
+    restart: unless-stopped
+    ports: ["8080:8080"]
+    environment:
+      BREADCRUMBS_KEYS: ${BREADCRUMBS_KEYS:?set BREADCRUMBS_KEYS in .env}
+      BREADCRUMBS_PUBLIC_URL: ${BREADCRUMBS_PUBLIC_URL:-http://localhost:8080}
+    volumes:
+      - data:/data
+volumes:
+  data:
