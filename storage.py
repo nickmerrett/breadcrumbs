@@ -13,6 +13,8 @@ import sqlite3
 from pathlib import Path
 from typing import Iterator
 
+import sqlite_vec
+
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS entries(
   id INTEGER PRIMARY KEY, title TEXT NOT NULL, body TEXT NOT NULL, type TEXT NOT NULL,
@@ -33,6 +35,11 @@ CREATE TABLE IF NOT EXISTS oauth_items(
   kind TEXT NOT NULL, key TEXT NOT NULL, payload TEXT NOT NULL, expires_at REAL,
   PRIMARY KEY(kind, key));
 """
+
+# Separate from SCHEMA because vec0 is a virtual table that requires the extension loaded first.
+VEC_SCHEMA = "CREATE VIRTUAL TABLE IF NOT EXISTS entry_vecs USING vec0(entry_id INTEGER PRIMARY KEY, embedding FLOAT[384])"
+
+EMBEDDING_DIM = 384
 
 _BRIEF = "e.id,e.title,e.type,e.outcome,e.summary,e.author,e.status,e.created_at"
 
@@ -98,6 +105,18 @@ class Session:
                        (eid, title, summary or "", body))
         return eid
 
+    def upsert_embedding(self, entry_id: int, vec_bytes: bytes) -> None:
+        self.c.execute(
+            "INSERT OR REPLACE INTO entry_vecs(entry_id, embedding) VALUES(?, ?)",
+            (entry_id, vec_bytes))
+
+    def vec_search(self, vec_bytes: bytes, k: int) -> list[int]:
+        """Return up to k entry_ids ordered by cosine-like distance (L2 on normalised vecs)."""
+        rows = self.c.execute(
+            "SELECT entry_id FROM entry_vecs WHERE embedding MATCH ? AND k=? ORDER BY distance",
+            (vec_bytes, k)).fetchall()
+        return [r["entry_id"] for r in rows]
+
     def get_entry(self, eid: int) -> dict | None:
         r = self.c.execute("SELECT * FROM entries WHERE id=?", (eid,)).fetchone()
         if not r:
@@ -107,9 +126,22 @@ class Session:
         d["tags"] = self.tags_of([eid])[eid]
         return d
 
+    def update_entry(self, eid: int, fields: dict) -> bool:
+        if not fields:
+            return False
+        set_clause = ", ".join(f"{k}=?" for k in fields)
+        params = list(fields.values()) + [eid]
+        return self.c.execute(
+            f"UPDATE entries SET {set_clause} WHERE id=?", params).rowcount > 0
+
+    def update_fts(self, eid: int, title: str, summary: str | None, body: str) -> None:
+        self.c.execute("DELETE FROM fts WHERE rowid=?", (eid,))
+        self.c.execute("INSERT INTO fts(rowid,title,summary,body) VALUES(?,?,?,?)",
+                       (eid, title, summary or "", body))
+
     def search(self, *, match: str | None, type: str | None, since: str | None,
-               tag: str | None, limit: int) -> list[dict]:
-        sql, where, params = f"SELECT {_BRIEF} FROM entries e", ["e.status!='rejected'"], []
+               tag: str | None, limit: int, offset: int = 0) -> list[dict]:
+        sql, where, params = f"SELECT {_BRIEF} FROM entries e", ["e.status NOT IN ('rejected','archived')"], []
         if match:
             sql += " JOIN fts ON fts.rowid=e.id"
             where.append("fts MATCH ?")
@@ -126,8 +158,37 @@ class Session:
             params += [tag, tag + "/%"]
         sql += " WHERE " + " AND ".join(where)
         sql += " ORDER BY bm25(fts)" if match else " ORDER BY e.created_at DESC, e.id DESC"
-        sql += " LIMIT ?"
-        params.append(limit)
+        sql += " LIMIT ? OFFSET ?"
+        params += [limit, offset]
+        rows = [dict(r) for r in self.c.execute(sql, params)]
+        tg = self.tags_of([r["id"] for r in rows])
+        for r in rows:
+            r["tags"] = tg[r["id"]]
+        return rows
+
+    def search_by_ids(self, ids: list[int], *, type: str | None, since: str | None,
+                      tag: str | None, limit: int, offset: int = 0) -> list[dict]:
+        """Filter a pre-ranked list of ids (from vec_search) and return brief rows."""
+        if not ids:
+            return []
+        placeholders = ",".join("?" * len(ids))
+        where = [f"e.id IN ({placeholders})", "e.status NOT IN ('rejected','archived')"]
+        params: list = list(ids)
+        if type:
+            where.append("e.type=?")
+            params.append(type)
+        if since:
+            where.append("e.created_at>=?")
+            params.append(since)
+        if tag:
+            where.append("EXISTS(SELECT 1 FROM entry_tags et JOIN tags t ON t.id=et.tag_id "
+                         "WHERE et.entry_id=e.id AND (t.name=? OR t.name LIKE ?))")
+            params += [tag, tag + "/%"]
+        # Preserve vector ranking order via CASE expression.
+        order = " ".join(f"WHEN e.id={eid} THEN {i}" for i, eid in enumerate(ids))
+        sql = (f"SELECT {_BRIEF} FROM entries e WHERE " + " AND ".join(where) +
+               f" ORDER BY CASE {order} ELSE {len(ids)} END LIMIT ? OFFSET ?")
+        params += [limit, offset]
         rows = [dict(r) for r in self.c.execute(sql, params)]
         tg = self.tags_of([r["id"] for r in rows])
         for r in rows:
@@ -169,10 +230,14 @@ class SQLiteStore:
         self.path = str(path)
         with self.session() as s:
             s.c.executescript(SCHEMA)
+            s.c.execute(VEC_SCHEMA)
 
     @contextlib.contextmanager
     def session(self) -> Iterator[Session]:
         conn = sqlite3.connect(self.path, timeout=5)
+        conn.enable_load_extension(True)
+        sqlite_vec.load(conn)
+        conn.enable_load_extension(False)
         conn.row_factory = sqlite3.Row
         # WAL lets readers and a writer work at once (several clients, one human browsing).
         conn.execute("PRAGMA journal_mode=WAL")

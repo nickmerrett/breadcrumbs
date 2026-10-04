@@ -1,0 +1,60 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: breadcrumbs
+spec:
+  replicas: 1  # SQLite is single-writer — do not scale above 1
+  selector:
+    matchLabels:
+      app: breadcrumbs
+  template:
+    metadata:
+      labels:
+        app: breadcrumbs
+    spec:
+      containers:
+        - name: breadcrumbs
+          image: your-registry/breadcrumbs:latest
+          ports:
+            - containerPort: 8080
+          env:
+            - name: BREADCRUMBS_DB
+              value: /data/breadcrumbs.db
+            - name: BREADCRUMBS_PUBLIC_URL
+              value: "https://breadcrumbs.your-domain.com"  # set to your Route URL
+            - name: BREADCRUMBS_KEYS
+              valueFrom:
+                secretKeyRef:
+                  name: breadcrumbs-secret
+                  key: BREADCRUMBS_KEYS
+            - name: BREADCRUMBS_TRUSTED_AGENTS
+              valueFrom:
+                secretKeyRef:
+                  name: breadcrumbs-secret
+                  key: BREADCRUMBS_TRUSTED_AGENTS
+          volumeMounts:
+            - name: data
+              mountPath: /data
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: 8080
+            initialDelaySeconds: 5
+            periodSeconds: 30
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: 8080
+            initialDelaySeconds: 3
+            periodSeconds: 10
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 256Mi
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: breadcrumbs-data

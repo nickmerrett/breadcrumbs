@@ -1,0 +1,14 @@
+# OpenShift Route — edge TLS termination (OpenShift provisions the cert)
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata:
+  name: breadcrumbs
+spec:
+  to:
+    kind: Service
+    name: breadcrumbs
+  port:
+    targetPort: 8080
+  tls:
+    termination: edge
+    insecureEdgeTerminationPolicy: Redirect

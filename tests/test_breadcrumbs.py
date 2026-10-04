@@ -30,7 +30,7 @@ def auth(key):
 def test_save_and_search(nb):
     r = nb.save_entry("claude", "Fluffy pancakes", "Rest the batter 10 min.", "recipe",
                       ["domain:cooking"], summary="Rested batter is fluffier")
-    assert r["saved"] and r["status"] == "proposed"
+    assert r["saved"] and r["status"] == "approved"
     hits = nb.search("pancake")
     assert [h["title"] for h in hits] == ["Fluffy pancakes"]
     assert hits[0]["author"] == "claude"
@@ -68,6 +68,20 @@ def test_status_and_verify(nb):
     assert nb.verify(eid) is True
     got = nb.get_entry(eid)
     assert got["status"] == "approved" and got["last_verified"]
+
+
+def test_semantic_search(nb):
+    nb.save_entry("a", "Sourdough starter", "Feed with flour and water daily.", "recipe",
+                  summary="Maintaining a live sourdough culture")
+    nb.save_entry("a", "Git rebase tips", "Use interactive rebase to squash commits.", "snippet")
+    hits = nb.search("fermented bread culture", semantic=True)
+    assert hits and hits[0]["title"] == "Sourdough starter"
+
+
+def test_source_context_stored(nb):
+    eid = nb.save_entry("a", "Pasta dough", "Mix flour and eggs.", "recipe",
+                        source_context="dinner party planning")["id"]
+    assert nb.get_entry(eid)["source_context"] == "dinner party planning"
 
 
 def test_since_filter(nb):

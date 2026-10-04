@@ -15,9 +15,11 @@ main{max-width:46rem;margin:0 auto;padding:1.25rem 1rem 4rem}
 a{color:var(--acc)}h1{font:600 1.5rem system-ui,sans-serif;margin:.2rem 0 1rem}
 h1 a{color:inherit;text-decoration:none}
 form.s{display:flex;gap:.5rem;margin-bottom:1rem}
-input[type=text]{flex:1;font:inherit;padding:.55rem .7rem;border:1px solid var(--rule);background:transparent;color:inherit;border-radius:4px}
+input[type=text],textarea{flex:1;font:inherit;padding:.55rem .7rem;border:1px solid var(--rule);background:transparent;color:inherit;border-radius:4px}
+textarea{width:100%;resize:vertical}
 button{font:600 .9rem system-ui,sans-serif;padding:.5rem .9rem;border:1px solid var(--acc);background:var(--acc);color:var(--bg);border-radius:4px;cursor:pointer}
 button.q{background:transparent;color:var(--acc)}
+button.danger{border-color:#c0392b;color:#c0392b;background:transparent}
 :focus-visible{outline:2px solid var(--acc);outline-offset:2px}
 .e{padding:.9rem 0;border-top:1px solid var(--rule)}
 .e h2{font:600 1.1rem Charter,Georgia,serif;margin:0}.e h2 a{text-decoration:none}
@@ -25,6 +27,9 @@ button.q{background:transparent;color:var(--acc)}
 .chip{display:inline-block;font:.78rem system-ui,sans-serif;background:var(--chip);padding:.05rem .45rem;border-radius:3px;margin:0 .25rem .25rem 0;text-decoration:none}
 .p{color:var(--warn)}pre.b{white-space:pre-wrap;font:inherit;margin:1rem 0}
 nav{font:.9rem system-ui,sans-serif;margin-bottom:1rem}
+label{display:block;font:.85rem system-ui,sans-serif;color:var(--mute);margin:.8rem 0 .2rem}
+.field{margin-bottom:.5rem}
+.pager{display:flex;gap:1rem;justify-content:center;margin-top:1.5rem;font:.9rem system-ui,sans-serif}
 """
 
 
@@ -47,30 +52,74 @@ def card(r: dict) -> str:
             f'<div class="m">{meta}</div>{summ}<div>{chips(r["tags"])}</div></div>')
 
 
-def home(rows: list[dict], q: str, tag: str, type_: str) -> str:
-    heading = "Recent" if not (q or tag or type_) else f"{len(rows)} found"
+def home(rows: list[dict], q: str, tag: str, type_: str, page: int = 0,
+         has_prev: bool = False, has_next: bool = False) -> str:
+    heading = "Recent" if not (q or tag or type_) else f"{len(rows)} result{'s' if len(rows) != 1 else ''}"
     types = "".join(f'<a class="chip" href="/?type={t}">{t}</a>' for t in sorted(TYPES))
     form = (f'<form class="s"><input type="text" name="q" value="{e(q)}" '
             f'placeholder="Search recipes, discoveries, dead ends" aria-label="Search">'
             f'<button>Search</button></form><div>{types}</div>')
     empty = "<p>Nothing here yet. Save something from any connected client and it will show up.</p>"
-    return form + f'<div class="m">{heading}</div>' + ("".join(card(r) for r in rows) or empty)
+
+    def page_url(p: int) -> str:
+        params = [f"page={p}"]
+        if q: params.append(f"q={e(q)}")
+        if tag: params.append(f"tag={e(tag)}")
+        if type_: params.append(f"type={e(type_)}")
+        return "/?" + "&".join(params)
+
+    pager = ""
+    if has_prev or has_next:
+        prev = f'<a href="{page_url(page - 1)}">← Previous</a>' if has_prev else '<span style="opacity:.35">← Previous</span>'
+        nxt = f'<a href="{page_url(page + 1)}">Next →</a>' if has_next else '<span style="opacity:.35">Next →</span>'
+        pager = f'<div class="pager">{prev}{nxt}</div>'
+
+    return form + f'<div class="m">{heading}</div>' + ("".join(card(r) for r in rows) or empty) + pager
 
 
 def entry(x: dict) -> str:
     src = (f'<div class="m">Source: <a href="{e(x["source_url"])}">{e(x["source_url"])}</a></div>'
            if x["source_url"] else "")
+    ctx = f'<div class="m">Context: {e(x["source_context"])}</div>' if x.get("source_context") else ""
     ver = f'verified {x["last_verified"][:10]}' if x["last_verified"] else "not yet verified"
     outcome = f" · {x['outcome']}" if x["outcome"] else ""
-    acts = "".join(
+    edit_link = f'<a href="/e/{x["id"]}/edit" style="font:.85rem system-ui,sans-serif">Edit</a>'
+    act_buttons = []
+    if x["status"] != "approved":
+        act_buttons.append(("approve", "Approve and mark verified", ""))
+    act_buttons.append(("archive", "Archive", "q"))
+    act_buttons.append(("reject", "Reject", "danger"))
+    acts = " ".join(
         f'<form method="post" action="/e/{x["id"]}/act" style="display:inline">'
-        f'<input type="hidden" name="do" value="{v}"><button class="{"" if v == "approve" else "q"}">{label}</button></form> '
-        for v, label in (("approve", "Approve and mark verified"), ("reject", "Reject")))
-    return (f'<nav><a href="/">All entries</a></nav>'
+        f'<input type="hidden" name="do" value="{v}"><button class="{cls}">{label}</button></form>'
+        for v, label, cls in act_buttons)
+    return (f'<nav><a href="/">All entries</a> · {edit_link}</nav>'
             f'<h2 style="font-size:1.4rem;margin:.2rem 0">{e(x["title"])}</h2>'
             f'<div class="m">{x["type"]}{outcome} · by {e(x["author"])} · {x["created_at"][:10]} · '
             f'{x["status"]} · {ver} · confidence {x["confidence"]:.1f}</div>'
-            f'<div>{chips(x["tags"])}</div>{src}<pre class="b">{e(x["body"])}</pre>{acts}')
+            f'<div>{chips(x["tags"])}</div>{src}{ctx}<pre class="b">{e(x["body"])}</pre>{acts}')
+
+
+def edit_form(x: dict) -> str:
+    tags_val = ", ".join(x.get("tags") or [])
+    def field(label_text: str, name: str, val: str, textarea: bool = False) -> str:
+        esc_val = e(val or "")
+        inp = (f'<textarea name="{name}" rows="8">{esc_val}</textarea>' if textarea
+               else f'<input type="text" name="{name}" value="{esc_val}">')
+        return f'<div class="field"><label>{label_text}</label>{inp}</div>'
+    return (f'<nav><a href="/e/{x["id"]}">{e(x["title"])}</a></nav>'
+            f'<h2 style="font-size:1.3rem;margin:.2rem 0">Edit entry</h2>'
+            f'<form method="post" action="/e/{x["id"]}/edit">'
+            + field("Title", "title", x["title"])
+            + field("Body", "body", x["body"], textarea=True)
+            + field("Summary (one line)", "summary", x.get("summary") or "")
+            + field("Outcome", "outcome", x.get("outcome") or "")
+            + field("Tags (comma-separated)", "tags", tags_val)
+            + field("Source URL", "source_url", x.get("source_url") or "")
+            + field("Source context", "source_context", x.get("source_context") or "")
+            + f'<button type="submit">Save changes</button> '
+            + f'<a href="/e/{x["id"]}" style="margin-left:.5rem;font:.9rem system-ui,sans-serif">Cancel</a>'
+            + '</form>')
 
 
 def login(client_name: str, req: str, error: str = "") -> str:

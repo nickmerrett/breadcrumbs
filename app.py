@@ -65,6 +65,18 @@ class EntryIn(BaseModel):
     force: bool = False
 
 
+class EntryUpdate(BaseModel):
+    title: str | None = None
+    body: str | None = None
+    summary: str | None = None
+    outcome: str | None = None
+    data: dict | None = None
+    source_url: str | None = None
+    source_context: str | None = None
+    confidence: float | None = Field(None, ge=0, le=1)
+    tags: list[str] | None = None
+
+
 def caller() -> str:
     """Who is calling this MCP tool? Set by the SDK's auth layer from the bearer token."""
     tok = get_access_token()
@@ -98,26 +110,29 @@ def create_app(db_path: str, keys: dict[str, str], public_url: str = "http://loc
     def save_entry(title: str, body: str, type: str, tags: list[str] | None = None,
                    outcome: str | None = None, summary: str | None = None,
                    data: dict | None = None, source_url: str | None = None,
+                   source_context: str | None = None,
                    confidence: float = 0.5) -> dict:
         """Save a self-contained entry to the shared notebook. type is one of: recipe, discovery,
         snippet, dead-end, howto, reference, question, idea. tags look like 'domain:cooking/baking'
         or 'tech:python' (call list_tags first and reuse them). outcome: worked, partial, failed or
-        untested. summary is one plain line. For recipes put ingredients and method in body
+        untested. summary is one plain line. source_context is optional freeform provenance (e.g.
+        the conversation topic or project name). For recipes put ingredients and method in body
         (markdown) and any structured fields in data. Returns the id, or a duplicate_of id if the
         entry already exists."""
         try:
             return nb.save_entry(caller(), title, body, type, tags, outcome,
-                                 summary, data, source_url, None, confidence)
+                                 summary, data, source_url, source_context, confidence)
         except ValueError as ex:
             return {"saved": False, "error": str(ex)}
 
     @mcp.tool()
     def search(query: str | None = None, tag: str | None = None, type: str | None = None,
-               since: str | None = None, limit: int = 8) -> list[dict]:
+               since: str | None = None, limit: int = 8, semantic: bool = False) -> list[dict]:
         """Find entries. query is keywords; tag filters (a parent tag includes its children, e.g.
         'domain:cooking'); type filters by entry type; since is '7d' or an ISO date. With no query,
-        returns the most recent entries. Returns short summaries; use get_entry for full text."""
-        return nb.search(query, tag, type, since, limit)
+        returns the most recent entries. Set semantic=true for meaning-based search when keywords
+        are vague or you cannot recall exact wording. Returns short summaries; use get_entry for full text."""
+        return nb.search(query, tag, type, since, limit, semantic)
 
     @mcp.tool()
     def get_entry(id: int) -> dict:
@@ -163,8 +178,9 @@ def create_app(db_path: str, keys: dict[str, str], public_url: str = "http://loc
 
     @app.get("/api/search")
     def api_search(q: str | None = None, tag: str | None = None, type: str | None = None,
-                   since: str | None = None, limit: int = 10, agent: str = Depends(current_agent)):
-        return nb.search(q, tag, type, since, limit)
+                   since: str | None = None, limit: int = 10, semantic: bool = False,
+                   offset: int = 0, agent: str = Depends(current_agent)):
+        return nb.search(q, tag, type, since, limit, semantic, offset)
 
     @app.get("/api/entries/{eid}")
     def api_get(eid: int, agent: str = Depends(current_agent)):
@@ -172,6 +188,13 @@ def create_app(db_path: str, keys: dict[str, str], public_url: str = "http://loc
         if not entry:
             raise HTTPException(404, "not found")
         return entry
+
+    @app.patch("/api/entries/{eid}")
+    def api_update(eid: int, u: EntryUpdate, agent: str = Depends(current_agent)):
+        try:
+            return nb.update_entry(eid, **u.model_dump(exclude_none=True))
+        except ValueError as ex:
+            raise HTTPException(422, str(ex))
 
     @app.post("/api/entries/{eid}/status")
     def api_status(eid: int, status: str, agent: str = Depends(current_agent)):
@@ -217,10 +240,15 @@ def create_app(db_path: str, keys: dict[str, str], public_url: str = "http://loc
             return RedirectResponse(target, status_code=303)
 
     # ------------------------------------------------------------------ UI
+    PAGE_SIZE = 20
+
     @app.get("/", response_class=HTMLResponse)
-    def ui_home(q: str = "", tag: str = "", type: str = "", agent: str = Depends(current_agent)):
-        rows = nb.search(q or None, tag or None, type or None, None, 30)
-        return web.page("Breadcrumbs", web.home(rows, q, tag, type))
+    def ui_home(q: str = "", tag: str = "", type: str = "", page: int = 0,
+                agent: str = Depends(current_agent)):
+        rows = nb.search(q or None, tag or None, type or None, None, PAGE_SIZE, offset=page * PAGE_SIZE)
+        has_prev = page > 0
+        has_next = len(rows) == PAGE_SIZE
+        return web.page("Breadcrumbs", web.home(rows, q, tag, type, page, has_prev, has_next))
 
     @app.get("/e/{eid}", response_class=HTMLResponse)
     def ui_entry(eid: int, agent: str = Depends(current_agent)):
@@ -229,10 +257,39 @@ def create_app(db_path: str, keys: dict[str, str], public_url: str = "http://loc
             raise HTTPException(404, "not found")
         return web.page(entry["title"], web.entry(entry))
 
+    @app.get("/e/{eid}/edit", response_class=HTMLResponse)
+    def ui_edit_form(eid: int, agent: str = Depends(current_agent)):
+        entry = nb.get_entry(eid)
+        if not entry:
+            raise HTTPException(404, "not found")
+        return web.page(f"Edit — {entry['title']}", web.edit_form(entry))
+
+    @app.post("/e/{eid}/edit")
+    def ui_edit_submit(eid: int, agent: str = Depends(current_agent),
+                       title: str = Form(...), body: str = Form(...),
+                       summary: str = Form(""), outcome: str = Form(""),
+                       tags: str = Form(""), source_url: str = Form(""),
+                       source_context: str = Form("")):
+        try:
+            nb.update_entry(
+                eid,
+                title=title, body=body,
+                summary=summary or None,
+                outcome=outcome or None,
+                tags=[t.strip() for t in tags.split(",") if t.strip()] if tags.strip() else None,
+                source_url=source_url or None,
+                source_context=source_context or None,
+            )
+        except ValueError as ex:
+            raise HTTPException(422, str(ex))
+        return RedirectResponse(f"/e/{eid}", status_code=303)
+
     @app.post("/e/{eid}/act")
     def ui_act(eid: int, do: str = Form(...), agent: str = Depends(current_agent)):
         if do == "approve":
             nb.verify(eid)
+        elif do == "archive":
+            nb.set_status(eid, "archived")
         else:
             nb.set_status(eid, "rejected")
         return RedirectResponse(f"/e/{eid}", status_code=303)

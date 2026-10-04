@@ -2,3 +2,5 @@ fastapi
 uvicorn
 mcp<2
 python-multipart
+sqlite-vec
+fastembed

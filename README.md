@@ -1,15 +1,18 @@
 # Breadcrumbs
 
-A central long-term notebook for AI agents and the person using them. Anything a connected
-client saves (a recipe, a discovery, a dead end) can be found later from any other client, or
-browsed by you. One SQLite file, three front doors over the same logic:
+A personal long-term notebook that AI agents and you write to together. Save ideas, recipes,
+discoveries, dead ends, and links — then find them again months or years later by keyword,
+meaning, or tag. Entries are stamped with who saved them, fully searchable, and yours to
+export at any time.
+
+Three front doors over the same store:
 
 
 | Door | Path | For |
 |---|---|---|
-| MCP (streamable HTTP) | `/mcp` | Claude chat, Claude Code and other code assistants, any MCP client |
-| REST | `/api/...` (docs at `/docs`) | scripts, n8n, Home Assistant |
-| Browse UI | `/` | you: search, read, approve or reject |
+| MCP (streamable HTTP) | `/mcp` | Claude chat, Claude Code, any MCP client |
+| REST | `/api/...` (docs at `/docs`) | scripts, n8n, Home Assistant, other agents |
+| Browse UI | `/` | you: read, search, edit, archive |
 
 ## Run locally
 
@@ -64,36 +67,62 @@ Any other client: send `Authorization: Bearer <key>`, or use its OAuth support.
 
 ## MCP tools
 
-`save_entry`, `search`, `get_entry`, `list_tags`, `mark_verified`. The server sends instructions
-telling models to search first, save only confirmed things, write self-contained entries, and
-reuse existing tags.
+`save_entry`, `search`, `get_entry`, `list_tags`, `mark_verified`.
+
+The server instructs agents to search before saving, write self-contained entries that make
+sense without the surrounding conversation, and reuse existing tags rather than inventing
+near-duplicates.
+
+## Entries
+
+Each entry has a **type**, a freeform **body** (markdown), optional **tags**, **outcome**,
+**summary**, **source URL**, and **source context**.
+
+Types: `recipe`, `discovery`, `snippet`, `dead-end`, `howto`, `reference`, `question`,
+`idea`, `link`.
+
+Entries are saved as `approved` by default. If you configure `BREADCRUMBS_TRUSTED_AGENTS`,
+only agents in that list auto-approve — everything else lands as `proposed` and is flagged
+in the UI for your review.
+
+## Search
+
+Two modes, selectable per query:
+
+- **Keyword** (default) — SQLite FTS5 full-text search over title, summary, and body.
+- **Semantic** (`semantic=true`) — local embedding model (`BAAI/bge-small-en-v1.5`, ~30 MB,
+  runs fully offline) finds entries by meaning rather than exact words. Useful when you
+  cannot recall the exact wording of something you saved months ago.
+
+Both modes support filtering by tag, type, and date.
 
 ## Tags
 
 - Facets: `domain:`, `tech:`, `context:`, plus a free-form `tag:` tier. Hierarchy uses `/`.
 - Searching `domain:cooking` also returns everything under `domain:cooking/...`.
-- On write, tags resolve through aliases (`py` becomes `tech:python`), then near-duplicates map
-  to the existing tag (`bakng` becomes `baking`), then genuinely new tags are created.
-- Entry types: recipe, discovery, snippet, dead-end, howto, reference, question, idea.
-- New entries are `proposed`: searchable straight away and flagged in the UI until you approve
-  (which also marks them verified) or reject.
+- On write, tags resolve through aliases (`py` → `tech:python`), then near-duplicates map
+  to the existing tag (`bakng` → `baking`), then genuinely new tags are created.
 
-## Security notes
+## Security
 
+The server holds your data in plaintext so that search can work. Protect it accordingly:
+
+- Always run behind HTTPS in production.
+- Keep keys long and random.
 - Anyone can *register* an OAuth client (that is how Claude connects), but nothing is granted
   until someone enters a valid key on the login page. Each login request allows 5 attempts.
-- Keep keys long and random, and always run behind HTTPS.
-- Access tokens last 1 hour; refresh tokens 30 days and rotate on use. `/revoke` is enabled
-  (the SDK requires an empty `client_secret` form field even for public clients).
-- Only keys can approve a connection. There is no per-user account system yet.
-- OAuth state lives in the same SQLite file, so back that file up like the rest.
+- Access tokens last 1 hour; refresh tokens 30 days and rotate on use.
+- The server is open source — you can audit exactly what it does with your data.
+- **Self-hosting is the strongest privacy guarantee.** If you run your own instance on an
+  encrypted volume, no third party has access to your data.
+- `GET /api/export` returns everything as JSON. Your data is never a trap.
 
 ## Layout
 
 | File | Role |
 |---|---|
-| `storage.py` | All SQL. Swap this module to change the backing store. |
-| `core.py` | Validation, tag normalisation, saving and recall rules. No SQL, no web. |
+| `storage.py` | All SQL, vector store, schema. Swap to change the backing store. |
+| `core.py` | Validation, tag normalisation, embedding, saving and recall rules. No SQL, no web. |
 | `oauth.py` | OAuth provider: clients, codes, tokens, login check. |
 | `app.py` | `create_app()`: REST, MCP, auth, UI routes. |
 | `web.py` | HTML for the browse UI and login page. |
@@ -105,7 +134,10 @@ reuse existing tags.
 pip install -r requirements-dev.txt && pytest
 ```
 
-## Not built yet
+## Backlog
 
-Semantic (embedding) search, the weekly review screen and gardener (merge, prune, stale flags),
-per-user accounts and hosting, Postgres.
+- Weekly review / gardener (merge duplicates, prune stale entries, surface unverified)
+- Per-user accounts and hosted offering
+- Image attachments
+- Postgres backend
+- Audit log (who accessed what, when)
