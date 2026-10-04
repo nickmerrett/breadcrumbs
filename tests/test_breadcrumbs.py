@@ -84,6 +84,96 @@ def test_source_context_stored(nb):
     assert nb.get_entry(eid)["source_context"] == "dinner party planning"
 
 
+def test_update_entry(nb):
+    eid = nb.save_entry("a", "Pancake recipe", "Mix flour and eggs slowly.", "idea", ["domain:work"])["id"]
+    r = nb.update_entry(eid, title="Waffle recipe", body="Mix flour and butter quickly.", tags=["domain:learning"])
+    assert r["updated"] and r["tags"] == ["domain:learning"]
+    got = nb.get_entry(eid)
+    assert got["title"] == "Waffle recipe" and got["body"] == "Mix flour and butter quickly."
+    assert "domain:learning" in got["tags"] and "domain:work" not in got["tags"]
+    # FTS re-indexed: unique old words gone, unique new words present
+    assert nb.search("Waffle")       # new title indexed
+    assert nb.search("butter")       # new body word indexed
+    assert nb.search("Pancake") == []  # old title removed
+    assert nb.search("eggs") == []     # old body word removed
+
+
+def test_update_entry_not_found(nb):
+    with pytest.raises(ValueError, match="not found"):
+        nb.update_entry(999, title="x")
+
+
+def test_archive_hidden_from_search(nb):
+    eid = nb.save_entry("a", "Archived thing", "body", "idea")["id"]
+    nb.set_status(eid, "archived")
+    assert nb.search("Archived thing") == []
+    # But the entry itself is still retrievable directly
+    assert nb.get_entry(eid)["status"] == "archived"
+
+
+def test_pagination(nb):
+    for i in range(5):
+        nb.save_entry("a", f"Entry {i}", "body", "idea")
+    page0 = nb.search(limit=3, offset=0)
+    page1 = nb.search(limit=3, offset=3)
+    assert len(page0) == 3
+    assert len(page1) == 2
+    # No overlap
+    ids0 = {r["id"] for r in page0}
+    ids1 = {r["id"] for r in page1}
+    assert ids0.isdisjoint(ids1)
+
+
+def test_rest_patch_entry(client):
+    client.post("/api/entries", headers=auth("K1"),
+                json={"title": "Original", "body": "First draft", "type": "idea"})
+    r = client.patch("/api/entries/1", headers=auth("K1"),
+                     json={"title": "Revised", "body": "Second draft"})
+    assert r.status_code == 200 and r.json()["updated"]
+    got = client.get("/api/entries/1", headers=auth("K1")).json()
+    assert got["title"] == "Revised" and got["body"] == "Second draft"
+
+
+def test_rest_search_pagination(client):
+    for i in range(5):
+        client.post("/api/entries", headers=auth("K1"),
+                    json={"title": f"Item {i}", "body": "x", "type": "idea"})
+    p0 = client.get("/api/search", headers=auth("K1"), params={"limit": 3, "offset": 0}).json()
+    p1 = client.get("/api/search", headers=auth("K1"), params={"limit": 3, "offset": 3}).json()
+    assert len(p0) == 3 and len(p1) == 2
+    assert {r["id"] for r in p0}.isdisjoint({r["id"] for r in p1})
+
+
+def test_ui_archive_and_edit(client):
+    basic = {"Authorization": "Basic " + base64.b64encode(b"me:K1").decode()}
+    client.post("/api/entries", headers=auth("K1"),
+                json={"title": "To archive", "body": "body", "type": "idea"})
+    r = client.post("/e/1/act", data={"do": "archive"}, headers=basic, follow_redirects=False)
+    assert r.status_code == 303
+    assert client.get("/api/entries/1", headers=auth("K1")).json()["status"] == "archived"
+    # Edit form loads
+    assert client.get("/e/1/edit", headers=basic).status_code == 200
+    # Edit submit redirects back to entry
+    r2 = client.post("/e/1/edit", headers=basic,
+                     data={"title": "Edited", "body": "new body", "summary": "",
+                           "outcome": "", "tags": "", "source_url": "", "source_context": ""},
+                     follow_redirects=False)
+    assert r2.status_code == 303
+    assert client.get("/api/entries/1", headers=auth("K1")).json()["title"] == "Edited"
+
+
+def test_due_before_filter(nb):
+    nb.save_entry("a", "Overdue task", "x", "idea", due="2000-01-01")
+    nb.save_entry("a", "Future task", "x", "idea", due="2999-01-01")
+    nb.save_entry("a", "No due date", "x", "idea")
+    overdue = nb.search(due_before="2001-01-01")
+    assert [r["title"] for r in overdue] == ["Overdue task"]
+    all_due = nb.search(due_before="2999-12-31")
+    titles = {r["title"] for r in all_due}
+    assert "Overdue task" in titles and "Future task" in titles
+    assert "No due date" not in titles
+
+
 def test_since_filter(nb):
     nb.save_entry("a", "Recent", "x", "idea")
     assert len(nb.search(since="7d")) == 1

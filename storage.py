@@ -106,8 +106,10 @@ class Session:
         return eid
 
     def upsert_embedding(self, entry_id: int, vec_bytes: bytes) -> None:
+        # vec0 virtual tables don't support INSERT OR REPLACE; delete first.
+        self.c.execute("DELETE FROM entry_vecs WHERE entry_id=?", (entry_id,))
         self.c.execute(
-            "INSERT OR REPLACE INTO entry_vecs(entry_id, embedding) VALUES(?, ?)",
+            "INSERT INTO entry_vecs(entry_id, embedding) VALUES(?, ?)",
             (entry_id, vec_bytes))
 
     def vec_search(self, vec_bytes: bytes, k: int) -> list[int]:
@@ -135,12 +137,18 @@ class Session:
             f"UPDATE entries SET {set_clause} WHERE id=?", params).rowcount > 0
 
     def update_fts(self, eid: int, title: str, summary: str | None, body: str) -> None:
+        # FTS5 standalone tables don't support per-row delete via parameterised SQL.
+        # Delete the stale row and insert the new content; the caller must call
+        # rebuild_fts() in a separate session after committing, to flush stale index entries.
         self.c.execute("DELETE FROM fts WHERE rowid=?", (eid,))
         self.c.execute("INSERT INTO fts(rowid,title,summary,body) VALUES(?,?,?,?)",
                        (eid, title, summary or "", body))
 
+    def rebuild_fts(self) -> None:
+        self.c.execute("INSERT INTO fts(fts) VALUES('rebuild')")
+
     def search(self, *, match: str | None, type: str | None, since: str | None,
-               tag: str | None, limit: int, offset: int = 0) -> list[dict]:
+               tag: str | None, limit: int, offset: int = 0, due_before: str | None = None) -> list[dict]:
         sql, where, params = f"SELECT {_BRIEF} FROM entries e", ["e.status NOT IN ('rejected','archived')"], []
         if match:
             sql += " JOIN fts ON fts.rowid=e.id"
@@ -152,6 +160,9 @@ class Session:
         if since:
             where.append("e.created_at>=?")
             params.append(since)
+        if due_before:
+            where.append("e.due IS NOT NULL AND e.due<=?")
+            params.append(due_before)
         if tag:  # a parent tag also matches everything beneath it
             where.append("EXISTS(SELECT 1 FROM entry_tags et JOIN tags t ON t.id=et.tag_id "
                          "WHERE et.entry_id=e.id AND (t.name=? OR t.name LIKE ?))")

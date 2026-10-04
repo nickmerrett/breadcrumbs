@@ -116,6 +116,8 @@ class Notebook:
         if not title.strip() or not body.strip():
             raise ValueError("title and body are required")
         confidence = min(1.0, max(0.0, confidence))
+        # Compute embedding before the write session — model load must not run inside a transaction.
+        vec_bytes = self._embed(" ".join(filter(None, [title.strip(), summary, body])))
         with self.store.session() as s:
             dup = s.find_duplicate(title, t)
             if dup and not force:
@@ -134,8 +136,7 @@ class Notebook:
                 if tag and tag not in applied:
                     applied.append(tag)
                     s.attach_tag(eid, tag)
-            text = " ".join(filter(None, [title, summary, body]))
-            s.upsert_embedding(eid, self._embed(text))
+            s.upsert_embedding(eid, vec_bytes)
             return {"saved": True, "id": eid, "tags": applied, "notes": notes, "status": status}
 
     def update_entry(self, eid: int, title: str | None = None, body: str | None = None,
@@ -143,42 +144,45 @@ class Notebook:
                      data: dict | None = None, source_url: str | None = None,
                      source_context: str | None = None, confidence: float | None = None,
                      tags: list[str] | None = None) -> dict:
+        # Read existing entry to merge values before opening the write session.
         with self.store.session() as s:
             existing = s.get_entry(eid)
-            if not existing:
-                raise ValueError("entry not found")
-            fields: dict = {}
-            if title is not None:
-                fields["title"] = title.strip()
-            if body is not None:
-                fields["body"] = body
-            if summary is not None:
-                fields["summary"] = summary
-            if outcome is not None:
-                if outcome not in OUTCOMES:
-                    raise ValueError(f"outcome must be one of {sorted(OUTCOMES)}")
-                fields["outcome"] = outcome
-            if data is not None:
-                fields["data"] = data
-            if source_url is not None:
-                fields["source_url"] = source_url
-            if source_context is not None:
-                fields["source_context"] = source_context
-            if confidence is not None:
-                fields["confidence"] = min(1.0, max(0.0, confidence))
+        if not existing:
+            raise ValueError("entry not found")
+        fields: dict = {}
+        if title is not None:
+            fields["title"] = title.strip()
+        if body is not None:
+            fields["body"] = body
+        if summary is not None:
+            fields["summary"] = summary
+        if outcome is not None:
+            if outcome not in OUTCOMES:
+                raise ValueError(f"outcome must be one of {sorted(OUTCOMES)}")
+            fields["outcome"] = outcome
+        if data is not None:
+            fields["data"] = data
+        if source_url is not None:
+            fields["source_url"] = source_url
+        if source_context is not None:
+            fields["source_context"] = source_context
+        if confidence is not None:
+            fields["confidence"] = min(1.0, max(0.0, confidence))
+        new_title = fields.get("title", existing["title"])
+        new_summary = fields.get("summary", existing["summary"])
+        new_body = fields.get("body", existing["body"])
+        # Compute embedding BEFORE opening the write session — model load can be slow
+        # and running it inside an open transaction disrupts the WAL checkpoint.
+        vec_bytes = self._embed(" ".join(filter(None, [new_title, new_summary, new_body])))
+        # Session 2: write all changes atomically.
+        with self.store.session() as s:
             if fields:
                 s.update_entry(eid, fields)
-            # Re-index FTS and re-embed with merged values.
-            new_title = fields.get("title", existing["title"])
-            new_summary = fields.get("summary", existing["summary"])
-            new_body = fields.get("body", existing["body"])
             s.update_fts(eid, new_title, new_summary, new_body)
-            text = " ".join(filter(None, [new_title, new_summary, new_body]))
-            s.upsert_embedding(eid, self._embed(text))
-            # Replace tags if supplied.
+            s.upsert_embedding(eid, vec_bytes)
+            applied, notes = [], []
             if tags is not None:
                 s.c.execute("DELETE FROM entry_tags WHERE entry_id=?", (eid,))
-                applied, notes = [], []
                 for raw in tags[:MAX_TAGS]:
                     tag, note = self._resolve_tag(s, raw, create=True)
                     if note:
@@ -188,8 +192,10 @@ class Notebook:
                         s.attach_tag(eid, tag)
             else:
                 applied = existing["tags"]
-                notes = []
-            return {"updated": True, "id": eid, "tags": applied, "notes": notes}
+        # Session 3: rebuild FTS after the write session commits.
+        with self.store.session() as s:
+            s.rebuild_fts()
+        return {"updated": True, "id": eid, "tags": applied, "notes": notes}
 
     def set_status(self, eid: int, status: str) -> bool:
         if status not in STATUSES:
@@ -204,7 +210,7 @@ class Notebook:
     # --------------------------------------------------------------- reading
     def search(self, query: str | None = None, tag: str | None = None, type: str | None = None,
                since: str | None = None, limit: int = 10, semantic: bool = False,
-               offset: int = 0) -> list[dict]:
+               offset: int = 0, due_before: str | None = None) -> list[dict]:
         with self.store.session() as s:
             full = None
             if tag:
@@ -213,6 +219,7 @@ class Notebook:
             snc = parse_since(since, self._now())
             lim = max(1, min(limit, 50))
             off = max(0, offset)
+            due = due_before if due_before != "today" else self._now().date().isoformat()
 
             if semantic and query:
                 # Vector search: get top candidates, then apply tag/type/since filters.
@@ -226,7 +233,8 @@ class Notebook:
                 words = re.findall(r"\w+", query)
                 if words:
                     match = " OR ".join(f'"{w}"*' for w in words)
-            return s.search(match=match, type=t, since=snc, tag=full, limit=lim, offset=off)
+            return s.search(match=match, type=t, since=snc, tag=full, limit=lim, offset=off,
+                            due_before=due)
 
     def get_entry(self, eid: int) -> dict | None:
         with self.store.session() as s:

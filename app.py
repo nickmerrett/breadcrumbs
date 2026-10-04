@@ -127,12 +127,14 @@ def create_app(db_path: str, keys: dict[str, str], public_url: str = "http://loc
 
     @mcp.tool()
     def search(query: str | None = None, tag: str | None = None, type: str | None = None,
-               since: str | None = None, limit: int = 8, semantic: bool = False) -> list[dict]:
+               since: str | None = None, limit: int = 8, semantic: bool = False,
+               due_before: str | None = None) -> list[dict]:
         """Find entries. query is keywords; tag filters (a parent tag includes its children, e.g.
         'domain:cooking'); type filters by entry type; since is '7d' or an ISO date. With no query,
         returns the most recent entries. Set semantic=true for meaning-based search when keywords
-        are vague or you cannot recall exact wording. Returns short summaries; use get_entry for full text."""
-        return nb.search(query, tag, type, since, limit, semantic)
+        are vague or you cannot recall exact wording. due_before filters to entries with a due date
+        on or before that date (ISO date or 'today'). Returns short summaries; use get_entry for full text."""
+        return nb.search(query, tag, type, since, limit, semantic, due_before=due_before)
 
     @mcp.tool()
     def get_entry(id: int) -> dict:
@@ -179,8 +181,9 @@ def create_app(db_path: str, keys: dict[str, str], public_url: str = "http://loc
     @app.get("/api/search")
     def api_search(q: str | None = None, tag: str | None = None, type: str | None = None,
                    since: str | None = None, limit: int = 10, semantic: bool = False,
-                   offset: int = 0, agent: str = Depends(current_agent)):
-        return nb.search(q, tag, type, since, limit, semantic, offset)
+                   offset: int = 0, due_before: str | None = None,
+                   agent: str = Depends(current_agent)):
+        return nb.search(q, tag, type, since, limit, semantic, offset, due_before)
 
     @app.get("/api/entries/{eid}")
     def api_get(eid: int, agent: str = Depends(current_agent)):
