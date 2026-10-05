@@ -62,6 +62,11 @@ class Notebook:
         self._trusted = trusted_agents  # None = all trusted
         self._embedder: TextEmbedding | None = None
         store.seed(SEED_TAGS, SEED_ALIASES)
+        self._warmup()
+
+    def _warmup(self) -> None:
+        """Pre-load the embedding model at startup so the first save_entry call doesn't block."""
+        self._embed("warmup")
 
     def _embed(self, text: str) -> bytes:
         if self._embedder is None:
