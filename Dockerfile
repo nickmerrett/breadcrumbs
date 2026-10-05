@@ -9,6 +9,7 @@ USER app
 ENV BREADCRUMBS_DB=/data/breadcrumbs.db
 VOLUME /data
 EXPOSE 8080
-HEALTHCHECK CMD python -c "import urllib.request;urllib.request.urlopen('http://localhost:8080/healthz')"
+HEALTHCHECK --interval=30s --timeout=10s --start-period=120s --retries=3 \
+    CMD python -c "import urllib.request;urllib.request.urlopen('http://localhost:8080/healthz')"
 # --proxy-headers so redirects use the public https address behind Caddy or a tunnel
 CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8080", "--proxy-headers", "--forwarded-allow-ips", "*"]
