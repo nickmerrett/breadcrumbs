@@ -18,7 +18,7 @@ _EMBED_MODEL = "BAAI/bge-small-en-v1.5"
 
 TYPES = {"recipe", "discovery", "snippet", "dead-end", "howto", "reference", "question", "idea", "link"}
 OUTCOMES = {"worked", "partial", "failed", "untested"}
-STATUSES = {"proposed", "approved", "rejected", "archived"}
+STATUSES = {"proposed", "approved", "rejected", "archived", "done"}
 FACETS = {"domain", "tech", "context", "tag"}  # "tag:" is the free-form tier
 MAX_TAGS = 8
 FUZZY_CUTOFF = 0.88
@@ -27,8 +27,9 @@ SEED_TAGS = [
     "domain:cooking", "domain:cooking/baking", "domain:gardening", "domain:home",
     "domain:home/automation", "domain:software", "domain:software/ai-agents",
     "domain:writing", "domain:work", "domain:learning",
+    "domain:shopping", "domain:gifts",
     "tech:python", "tech:postgres", "tech:docker", "tech:git", "tech:home-assistant",
-    "context:debugging", "context:research",
+    "context:debugging", "context:research", "context:christmas-2025",
 ]
 SEED_ALIASES = {
     "py": "tech:python", "python3": "tech:python", "postgresql": "tech:postgres",
@@ -148,7 +149,8 @@ class Notebook:
                      summary: str | None = None, outcome: str | None = None,
                      data: dict | None = None, source_url: str | None = None,
                      source_context: str | None = None, confidence: float | None = None,
-                     tags: list[str] | None = None) -> dict:
+                     tags: list[str] | None = None, state: str | None = None,
+                     due: str | None = None) -> dict:
         # Read existing entry to merge values before opening the write session.
         with self.store.session() as s:
             existing = s.get_entry(eid)
@@ -173,6 +175,10 @@ class Notebook:
             fields["source_context"] = source_context
         if confidence is not None:
             fields["confidence"] = min(1.0, max(0.0, confidence))
+        if state is not None:
+            fields["state"] = state
+        if due is not None:
+            fields["due"] = due
         new_title = fields.get("title", existing["title"])
         new_summary = fields.get("summary", existing["summary"])
         new_body = fields.get("body", existing["body"])

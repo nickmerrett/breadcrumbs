@@ -149,7 +149,7 @@ class Session:
 
     def search(self, *, match: str | None, type: str | None, since: str | None,
                tag: str | None, limit: int, offset: int = 0, due_before: str | None = None) -> list[dict]:
-        sql, where, params = f"SELECT {_BRIEF} FROM entries e", ["e.status NOT IN ('rejected','archived')"], []
+        sql, where, params = f"SELECT {_BRIEF} FROM entries e", ["e.status NOT IN ('rejected','archived','done')"], []
         if match:
             sql += " JOIN fts ON fts.rowid=e.id"
             where.append("fts MATCH ?")

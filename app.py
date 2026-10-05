@@ -75,6 +75,8 @@ class EntryUpdate(BaseModel):
     source_context: str | None = None
     confidence: float | None = Field(None, ge=0, le=1)
     tags: list[str] | None = None
+    state: str | None = None
+    due: str | None = None
 
 
 def caller() -> str:
@@ -271,6 +273,7 @@ def create_app(db_path: str, keys: dict[str, str], public_url: str = "http://loc
     def ui_edit_submit(eid: int, agent: str = Depends(current_agent),
                        title: str = Form(...), body: str = Form(...),
                        summary: str = Form(""), outcome: str = Form(""),
+                       state: str = Form(""), due: str = Form(""),
                        tags: str = Form(""), source_url: str = Form(""),
                        source_context: str = Form("")):
         try:
@@ -279,6 +282,8 @@ def create_app(db_path: str, keys: dict[str, str], public_url: str = "http://loc
                 title=title, body=body,
                 summary=summary or None,
                 outcome=outcome or None,
+                state=state or None,
+                due=due or None,
                 tags=[t.strip() for t in tags.split(",") if t.strip()] if tags.strip() else None,
                 source_url=source_url or None,
                 source_context=source_context or None,
@@ -291,10 +296,9 @@ def create_app(db_path: str, keys: dict[str, str], public_url: str = "http://loc
     def ui_act(eid: int, do: str = Form(...), agent: str = Depends(current_agent)):
         if do == "approve":
             nb.verify(eid)
-        elif do == "archive":
-            nb.set_status(eid, "archived")
-        else:
-            nb.set_status(eid, "rejected")
+        elif do in ("archive", "done", "reject"):
+            status_map = {"archive": "archived", "reject": "rejected", "done": "done"}
+            nb.set_status(eid, status_map[do])
         return RedirectResponse(f"/e/{eid}", status_code=303)
 
     # Mounted last so the routes above take precedence; its endpoint is /mcp

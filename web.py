@@ -46,7 +46,9 @@ def chips(tags: list[str]) -> str:
 def card(r: dict) -> str:
     flag = ' <span class="p">· awaiting review</span>' if r["status"] == "proposed" else ""
     outcome = f" · {r['outcome']}" if r["outcome"] else ""
-    meta = f'{r["type"]}{outcome} · {r["created_at"][:10]} · {e(r["author"])}{flag}'
+    state = f' · <em>{e(r["state"])}</em>' if r.get("state") else ""
+    due = f' · due {e(r["due"])}' if r.get("due") else ""
+    meta = f'{r["type"]}{outcome}{state}{due} · {r["created_at"][:10]} · {e(r["author"])}{flag}'
     summ = f'<div>{e(r["summary"])}</div>' if r["summary"] else ""
     return (f'<div class="e"><h2><a href="/e/{r["id"]}">{e(r["title"])}</a></h2>'
             f'<div class="m">{meta}</div>{summ}<div>{chips(r["tags"])}</div></div>')
@@ -83,10 +85,14 @@ def entry(x: dict) -> str:
     ctx = f'<div class="m">Context: {e(x["source_context"])}</div>' if x.get("source_context") else ""
     ver = f'verified {x["last_verified"][:10]}' if x["last_verified"] else "not yet verified"
     outcome = f" · {x['outcome']}" if x["outcome"] else ""
+    state = f'<div class="m">State: {e(x["state"])}</div>' if x.get("state") else ""
+    due = f'<div class="m">Due: {e(x["due"])}</div>' if x.get("due") else ""
     edit_link = f'<a href="/e/{x["id"]}/edit" style="font:.85rem system-ui,sans-serif">Edit</a>'
     act_buttons = []
     if x["status"] != "approved":
         act_buttons.append(("approve", "Approve and mark verified", ""))
+    if x["status"] != "done":
+        act_buttons.append(("done", "Mark done", ""))
     act_buttons.append(("archive", "Archive", "q"))
     act_buttons.append(("reject", "Reject", "danger"))
     acts = " ".join(
@@ -97,7 +103,7 @@ def entry(x: dict) -> str:
             f'<h2 style="font-size:1.4rem;margin:.2rem 0">{e(x["title"])}</h2>'
             f'<div class="m">{x["type"]}{outcome} · by {e(x["author"])} · {x["created_at"][:10]} · '
             f'{x["status"]} · {ver} · confidence {x["confidence"]:.1f}</div>'
-            f'<div>{chips(x["tags"])}</div>{src}{ctx}<pre class="b">{e(x["body"])}</pre>{acts}')
+            f'<div>{chips(x["tags"])}</div>{src}{ctx}{state}{due}<pre class="b">{e(x["body"])}</pre>{acts}')
 
 
 def edit_form(x: dict) -> str:
@@ -114,6 +120,8 @@ def edit_form(x: dict) -> str:
             + field("Body", "body", x["body"], textarea=True)
             + field("Summary (one line)", "summary", x.get("summary") or "")
             + field("Outcome", "outcome", x.get("outcome") or "")
+            + field("State (e.g. needed, bought, wrapped)", "state", x.get("state") or "")
+            + field("Due date (YYYY-MM-DD)", "due", x.get("due") or "")
             + field("Tags (comma-separated)", "tags", tags_val)
             + field("Source URL", "source_url", x.get("source_url") or "")
             + field("Source context", "source_context", x.get("source_context") or "")
