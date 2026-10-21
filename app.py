@@ -253,7 +253,8 @@ def create_app(db_path: str, keys: dict[str, str], public_url: str = "http://loc
         rows = nb.search(q or None, tag or None, type or None, None, PAGE_SIZE, offset=page * PAGE_SIZE)
         has_prev = page > 0
         has_next = len(rows) == PAGE_SIZE
-        return web.page("Breadcrumbs", web.home(rows, q, tag, type, page, has_prev, has_next))
+        top_tags = [t["tag"] for t in nb.list_tags()[:12]]
+        return web.page("Breadcrumbs", web.home(rows, q, tag, type, page, has_prev, has_next, top_tags=top_tags))
 
     @app.get("/e/{eid}", response_class=HTMLResponse)
     def ui_entry(eid: int, agent: str = Depends(current_agent)):
@@ -261,6 +262,30 @@ def create_app(db_path: str, keys: dict[str, str], public_url: str = "http://loc
         if not entry:
             raise HTTPException(404, "not found")
         return web.page(entry["title"], web.entry(entry))
+
+    @app.get("/new", response_class=HTMLResponse)
+    def ui_new_form(agent: str = Depends(current_agent)):
+        from core import TYPES
+        return web.page("New Entry", web.new_form(list(TYPES)), show_add=False)
+
+    @app.post("/new")
+    def ui_new_submit(agent: str = Depends(current_agent),
+                      title: str = Form(...), type: str = Form(...),
+                      body: str = Form(""), summary: str = Form(""),
+                      outcome: str = Form(""), tags: str = Form(""),
+                      source_url: str = Form("")):
+        from core import TYPES
+        try:
+            result = nb.save_entry(
+                agent, title=title, body=body, type=type,
+                summary=summary or None,
+                outcome=outcome or None,
+                tags=[t.strip() for t in tags.split(",") if t.strip()] if tags.strip() else [],
+                source_url=source_url or None,
+            )
+        except ValueError as ex:
+            return HTMLResponse(web.page("New Entry", web.new_form(list(TYPES), str(ex)), show_add=False), 422)
+        return RedirectResponse(f"/e/{result['id']}", status_code=303)
 
     @app.get("/e/{eid}/edit", response_class=HTMLResponse)
     def ui_edit_form(eid: int, agent: str = Depends(current_agent)):

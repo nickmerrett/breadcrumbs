@@ -12,8 +12,10 @@ CSS = """
 @media(prefers-color-scheme:dark){:root{--bg:#14181e;--ink:#e4e8ee;--mute:#98a3b3;--rule:#2b323c;--acc:#6bb8d1;--chip:#222a34;--warn:#e0a24a}}
 *{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--ink);font:17px/1.6 Charter,"Iowan Old Style",Georgia,serif}
 main{max-width:46rem;margin:0 auto;padding:1.25rem 1rem 4rem}
-a{color:var(--acc)}h1{font:600 1.5rem system-ui,sans-serif;margin:.2rem 0 1rem}
+a{color:var(--acc)}h1{font:600 1.5rem system-ui,sans-serif;margin:.2rem 0 1rem;display:flex;align-items:center;justify-content:space-between}
 h1 a{color:inherit;text-decoration:none}
+.add-btn{font:600 1.1rem system-ui,sans-serif;line-height:1;padding:.15rem .55rem;border:1px solid var(--acc);background:transparent;color:var(--acc);border-radius:4px;text-decoration:none}
+.add-btn:hover{background:var(--acc);color:var(--bg)}
 form.s{display:flex;gap:.5rem;margin-bottom:1rem}
 input[type=text],textarea{flex:1;font:inherit;padding:.55rem .7rem;border:1px solid var(--rule);background:transparent;color:inherit;border-radius:4px}
 textarea{width:100%;resize:vertical}
@@ -33,10 +35,11 @@ label{display:block;font:.85rem system-ui,sans-serif;color:var(--mute);margin:.8
 """
 
 
-def page(title: str, body: str) -> str:
+def page(title: str, body: str, *, show_add: bool = True) -> str:
+    add = '<a class="add-btn" href="/new" aria-label="Add entry">+</a>' if show_add else ""
     return (f'<!doctype html><html lang="en"><meta charset="utf-8">'
             f'<meta name="viewport" content="width=device-width,initial-scale=1"><title>{e(title)}</title>'
-            f"<style>{CSS}</style><main><h1><a href='/'>Breadcrumbs</a></h1>{body}</main></html>")
+            f"<style>{CSS}</style><main><h1><a href='/'>Breadcrumbs</a>{add}</h1>{body}</main></html>")
 
 
 def chips(tags: list[str]) -> str:
@@ -55,12 +58,17 @@ def card(r: dict) -> str:
 
 
 def home(rows: list[dict], q: str, tag: str, type_: str, page: int = 0,
-         has_prev: bool = False, has_next: bool = False) -> str:
+         has_prev: bool = False, has_next: bool = False,
+         top_tags: list[str] | None = None) -> str:
     heading = "Recent" if not (q or tag or type_) else f"{len(rows)} result{'s' if len(rows) != 1 else ''}"
     types = "".join(f'<a class="chip" href="/?type={t}">{t}</a>' for t in sorted(TYPES))
+    tag_chips = ""
+    if top_tags:
+        tag_chips = (' <span style="color:var(--rule)">·</span> '
+                     + "".join(f'<a class="chip" href="/?tag={e(t)}">{e(t)}</a>' for t in top_tags))
     form = (f'<form class="s"><input type="text" name="q" value="{e(q)}" '
             f'placeholder="Search recipes, discoveries, dead ends" aria-label="Search">'
-            f'<button>Search</button></form><div>{types}</div>')
+            f'<button>Search</button></form><div>{types}{tag_chips}</div>')
     empty = "<p>Nothing here yet. Save something from any connected client and it will show up.</p>"
 
     def page_url(p: int) -> str:
@@ -127,6 +135,30 @@ def edit_form(x: dict) -> str:
             + field("Source context", "source_context", x.get("source_context") or "")
             + f'<button type="submit">Save changes</button> '
             + f'<a href="/e/{x["id"]}" style="margin-left:.5rem;font:.9rem system-ui,sans-serif">Cancel</a>'
+            + '</form>')
+
+
+def new_form(types: list[str], error: str = "") -> str:
+    err = f'<p class="p">{e(error)}</p>' if error else ""
+    def field(label_text: str, name: str, val: str = "", textarea: bool = False, placeholder: str = "") -> str:
+        esc_val = e(val)
+        inp = (f'<textarea name="{name}" rows="8" placeholder="{e(placeholder)}">{esc_val}</textarea>' if textarea
+               else f'<input type="text" name="{name}" value="{esc_val}" placeholder="{e(placeholder)}">')
+        return f'<div class="field"><label>{label_text}</label>{inp}</div>'
+    type_opts = "".join(f'<option value="{e(t)}">{e(t)}</option>' for t in sorted(types))
+    type_sel = f'<div class="field"><label>Type</label><select name="type" style="font:inherit;padding:.55rem .7rem;border:1px solid var(--rule);background:transparent;color:inherit;border-radius:4px">{type_opts}</select></div>'
+    return (f'<nav><a href="/">All entries</a></nav>'
+            f'<h2 style="font-size:1.3rem;margin:.2rem 0">New entry</h2>{err}'
+            f'<form method="post" action="/new">'
+            + field("Title", "title")
+            + type_sel
+            + field("Body", "body", textarea=True, placeholder="Full content — be self-contained")
+            + field("Summary (one line)", "summary")
+            + field("Outcome (worked / partial / failed / untested)", "outcome")
+            + field("Tags (comma-separated)", "tags")
+            + field("Source URL", "source_url")
+            + f'<button type="submit">Save</button> '
+            + f'<a href="/" style="margin-left:.5rem;font:.9rem system-ui,sans-serif">Cancel</a>'
             + '</form>')
 
 
