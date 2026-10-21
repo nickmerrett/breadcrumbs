@@ -147,7 +147,8 @@ def _atomic_write(path: Path, text: str) -> None:
             f.write(text)
             f.flush()
             os.fsync(f.fileno())
-        shutil.copymode(path, tmp)
+        if path.exists():
+            shutil.copymode(path, tmp)
         os.replace(tmp, path)  # the atomic commit point
     except BaseException:
         if os.path.exists(tmp):

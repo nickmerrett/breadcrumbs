@@ -17,8 +17,8 @@ import sqlite_vec
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS entries(
-  id INTEGER PRIMARY KEY, title TEXT NOT NULL, body TEXT NOT NULL, type TEXT NOT NULL,
-  outcome TEXT, summary TEXT, data TEXT, state TEXT, due TEXT,
+  id INTEGER PRIMARY KEY, file_id TEXT UNIQUE, title TEXT NOT NULL, body TEXT NOT NULL,
+  type TEXT NOT NULL, outcome TEXT, summary TEXT, data TEXT, state TEXT, due TEXT,
   confidence REAL DEFAULT 0.5, source_url TEXT, source_context TEXT,
   author TEXT NOT NULL, status TEXT DEFAULT 'proposed',
   created_at TEXT NOT NULL, last_verified TEXT);
@@ -30,11 +30,15 @@ CREATE TABLE IF NOT EXISTS entry_tags(
 CREATE VIRTUAL TABLE IF NOT EXISTS fts USING fts5(title, summary, body);
 CREATE INDEX IF NOT EXISTS entries_created ON entries(created_at);
 CREATE INDEX IF NOT EXISTS entries_type ON entries(type, status);
+CREATE INDEX IF NOT EXISTS entries_file_id ON entries(file_id);
 CREATE INDEX IF NOT EXISTS entry_tags_tag ON entry_tags(tag_id);
 CREATE TABLE IF NOT EXISTS oauth_items(
   kind TEXT NOT NULL, key TEXT NOT NULL, payload TEXT NOT NULL, expires_at REAL,
   PRIMARY KEY(kind, key));
 """
+
+# Applied once when an existing DB lacks the file_id column (upgrading from SQLite-only).
+MIGRATE = "ALTER TABLE entries ADD COLUMN file_id TEXT"
 
 # Separate from SCHEMA because vec0 is a virtual table that requires the extension loaded first.
 VEC_SCHEMA = "CREATE VIRTUAL TABLE IF NOT EXISTS entry_vecs USING vec0(entry_id INTEGER PRIMARY KEY, embedding FLOAT[384])"
@@ -94,12 +98,15 @@ class Session:
     def insert_entry(self, *, title: str, body: str, type: str, outcome: str | None,
                      summary: str | None, data: dict | None, state: str | None, due: str | None,
                      confidence: float, source_url: str | None, source_context: str | None,
-                     author: str, created_at: str, status: str = "proposed") -> int:
+                     author: str, created_at: str, status: str = "proposed",
+                     file_id: str | None = None, last_verified: str | None = None) -> int:
         cur = self.c.execute(
-            "INSERT INTO entries(title,body,type,outcome,summary,data,state,due,confidence,"
-            "source_url,source_context,author,status,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-            (title, body, type, outcome, summary, json.dumps(data) if data else None, state, due,
-             confidence, source_url, source_context, author, status, created_at))
+            "INSERT INTO entries(file_id,title,body,type,outcome,summary,data,state,due,confidence,"
+            "source_url,source_context,author,status,created_at,last_verified) "
+            "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            (file_id, title, body, type, outcome, summary, json.dumps(data) if data else None,
+             state, due, confidence, source_url, source_context, author, status, created_at,
+             last_verified))
         eid = cur.lastrowid
         self.c.execute("INSERT INTO fts(rowid,title,summary,body) VALUES(?,?,?,?)",
                        (eid, title, summary or "", body))
@@ -242,6 +249,10 @@ class SQLiteStore:
         with self.session() as s:
             s.c.executescript(SCHEMA)
             s.c.execute(VEC_SCHEMA)
+            # Migrate existing DBs that pre-date the file_id column.
+            cols = {r[1] for r in s.c.execute("PRAGMA table_info(entries)")}
+            if "file_id" not in cols:
+                s.c.execute(MIGRATE)
 
     @contextlib.contextmanager
     def session(self) -> Iterator[Session]:

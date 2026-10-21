@@ -6,7 +6,8 @@ RUN pip install -r requirements.txt
 COPY *.py ./
 RUN useradd --create-home app && mkdir /data && chown app /data
 USER app
-ENV BREADCRUMBS_DB=/data/breadcrumbs.db
+# /data is the volume mount — entries/*.md live here, index.sqlite is derived
+ENV BREADCRUMBS_DIR=/data
 VOLUME /data
 EXPOSE 8080
 HEALTHCHECK --interval=30s --timeout=10s --start-period=120s --retries=3 \

@@ -17,8 +17,8 @@ from pydantic import BaseModel, Field
 
 import web
 from core import Notebook
+from filestore import FileStore
 from oauth import BreadcrumbsProvider
-from storage import SQLiteStore
 
 INSTRUCTIONS = (
     "A shared long-term notebook used by several AI clients and one human. "
@@ -87,12 +87,12 @@ def caller() -> str:
     return (tok.claims or {}).get("agent") or tok.client_id
 
 
-def create_app(db_path: str, keys: dict[str, str], public_url: str = "http://localhost:8080",
+def create_app(data_dir: str, keys: dict[str, str], public_url: str = "http://localhost:8080",
                trusted_agents: set[str] | None = None) -> FastAPI:
-    store = SQLiteStore(db_path)
-    nb = Notebook(store, trusted_agents=trusted_agents)
+    fs = FileStore(data_dir)
+    nb = Notebook(fs, trusted_agents=trusted_agents)
     public_url = public_url.rstrip("/")
-    provider = BreadcrumbsProvider(store, keys, public_url) if keys else None
+    provider = BreadcrumbsProvider(fs.sql, keys, public_url) if keys else None
 
     # ----------------------------------------------------------------- MCP
     auth_kwargs = {}
@@ -221,6 +221,12 @@ def create_app(db_path: str, keys: dict[str, str], public_url: str = "http://loc
         """Everything, as JSON. The store should never be a trap."""
         return nb.export()
 
+    @app.post("/api/reindex")
+    def api_reindex(agent: str = Depends(current_agent)):
+        """Rebuild the SQLite index from .md files on disk. Safe to run at any time."""
+        count = nb.reindex()
+        return {"reindexed": count}
+
     # ---------------------------------------------------------- OAuth login
     # The SDK serves /.well-known/*, /register, /authorize, /token and /revoke.
     # /authorize sends the browser here to prove the owner is present.
@@ -253,7 +259,7 @@ def create_app(db_path: str, keys: dict[str, str], public_url: str = "http://loc
         rows = nb.search(q or None, tag or None, type or None, None, PAGE_SIZE, offset=page * PAGE_SIZE)
         has_prev = page > 0
         has_next = len(rows) == PAGE_SIZE
-        top_tags = [t["tag"] for t in nb.list_tags()[:12]]
+        top_tags = [t["name"] for t in nb.list_tags()[:12]]
         return web.page("Breadcrumbs", web.home(rows, q, tag, type, page, has_prev, has_next, top_tags=top_tags))
 
     @app.get("/e/{eid}", response_class=HTMLResponse)
