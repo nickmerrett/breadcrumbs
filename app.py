@@ -153,6 +153,43 @@ def create_app(data_dir: str, keys: dict[str, str], public_url: str = "http://lo
         """Mark an entry as re-checked and still correct (updates last_verified)."""
         return {"ok": nb.verify(id)}
 
+    @mcp.tool()
+    def update_entry(id: int, title: str | None = None, body: str | None = None,
+                     summary: str | None = None, outcome: str | None = None,
+                     tags: list[str] | None = None, source_url: str | None = None,
+                     source_context: str | None = None, due: str | None = None,
+                     state: str | None = None, confidence: float | None = None) -> dict:
+        """Edit an existing entry. Only the fields you pass are changed; everything else is
+        left as-is. tags replaces the full tag list — call list_tags first and include any
+        you want to keep. Returns the updated entry id."""
+        try:
+            return nb.update_entry(id, title=title, body=body, summary=summary,
+                                   outcome=outcome, tags=tags, source_url=source_url,
+                                   source_context=source_context, due=due, state=state,
+                                   confidence=confidence)
+        except ValueError as ex:
+            return {"updated": False, "error": str(ex)}
+
+    @mcp.tool()
+    def set_status(id: int, status: str) -> dict:
+        """Set the lifecycle status of an entry. status must be one of: proposed, approved,
+        rejected, archived, done. Use 'done' to complete a task, 'archived' to shelve
+        something, 'rejected' to dismiss it. Cannot be undone via MCP — use the UI."""
+        try:
+            return {"ok": nb.set_status(id, status), "id": id, "status": status}
+        except ValueError as ex:
+            return {"ok": False, "error": str(ex)}
+
+    @mcp.tool()
+    def set_due(id: int, due: str | None) -> dict:
+        """Set or clear the due date on an entry. due is an ISO date string (YYYY-MM-DD)
+        or null to clear it."""
+        try:
+            nb.update_entry(id, due=due or "")
+            return {"ok": True, "id": id, "due": due}
+        except ValueError as ex:
+            return {"ok": False, "error": str(ex)}
+
     # ---------------------------------------------------------------- core
     @contextlib.asynccontextmanager
     async def lifespan(_app):
