@@ -123,7 +123,11 @@ def patch_entry(path: str | Path, changes: dict) -> None:
     Only the lines of the changed keys are rewritten; every other key, comment, blank line and
     the entire body stay exactly as they were. If nothing actually changes, the file is not
     touched. A changed key's whole value is replaced (a nested edit re-renders that key only).
+
+    'body' is not a frontmatter key — pass it via patch_body() instead. If 'body' appears in
+    changes it is silently ignored here to avoid corrupting the file.
     """
+    changes = {k: v for k, v in changes.items() if k != "body"}
     if not changes:
         raise ValueError("no changes given")
     md = split(read_text(path))
@@ -138,6 +142,16 @@ def patch_entry(path: str | Path, changes: dict) -> None:
     if list(check.keys()) != list(expected.keys()) or any(check[k] != expected[k] for k in expected):
         raise ValueError("refusing to write: patched frontmatter does not match the intended change")
     _atomic_write(Path(path), patched.render())
+
+
+def patch_body(path: str | Path, new_body: str) -> None:
+    """Replace the body (the text after the closing ---) atomically.
+    The frontmatter is carried through byte-for-byte.
+    """
+    md = split(read_text(path))
+    if md.body == new_body:
+        return
+    _atomic_write(Path(path), MdFile(md.opener, md.header, md.closer, new_body).render())
 
 
 def _atomic_write(path: Path, text: str) -> None:

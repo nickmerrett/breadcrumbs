@@ -32,6 +32,16 @@ CREATE INDEX IF NOT EXISTS entries_created ON entries(created_at);
 CREATE INDEX IF NOT EXISTS entries_type ON entries(type, status);
 CREATE INDEX IF NOT EXISTS entries_file_id ON entries(file_id);
 CREATE INDEX IF NOT EXISTS entry_tags_tag ON entry_tags(tag_id);
+CREATE TABLE IF NOT EXISTS lists(
+  id INTEGER PRIMARY KEY, file_id TEXT UNIQUE, title TEXT NOT NULL,
+  author TEXT NOT NULL, created_at TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS list_items(
+  list_id INTEGER REFERENCES lists(id) ON DELETE CASCADE,
+  entry_id INTEGER REFERENCES entries(id) ON DELETE CASCADE,
+  position INTEGER NOT NULL DEFAULT 0,
+  added_at TEXT NOT NULL,
+  PRIMARY KEY(list_id, entry_id));
+CREATE INDEX IF NOT EXISTS list_items_list ON list_items(list_id, position);
 CREATE TABLE IF NOT EXISTS oauth_items(
   kind TEXT NOT NULL, key TEXT NOT NULL, payload TEXT NOT NULL, expires_at REAL,
   PRIMARY KEY(kind, key));
@@ -155,8 +165,14 @@ class Session:
         self.c.execute("INSERT INTO fts(fts) VALUES('rebuild')")
 
     def search(self, *, match: str | None, type: str | None, since: str | None,
-               tag: str | None, limit: int, offset: int = 0, due_before: str | None = None) -> list[dict]:
-        sql, where, params = f"SELECT {_BRIEF} FROM entries e", ["e.status NOT IN ('rejected','archived','done')"], []
+               tag: str | None, limit: int, offset: int = 0, due_before: str | None = None,
+               status: str | None = None) -> list[dict]:
+        # Default: hide rejected and archived. 'done' is shown (recipes, discoveries stay useful).
+        default_exclude = "e.status NOT IN ('rejected','archived')"
+        sql, where, params = f"SELECT {_BRIEF} FROM entries e", [default_exclude], []
+        if status:
+            where.append("e.status=?")
+            params.append(status)
         if match:
             sql += " JOIN fts ON fts.rowid=e.id"
             where.append("fts MATCH ?")
@@ -222,6 +238,66 @@ class Session:
 
     def all_ids(self) -> list[int]:
         return [r["id"] for r in self.c.execute("SELECT id FROM entries ORDER BY id")]
+
+
+    # ------------------------------------------------------------------ lists
+
+    def insert_list(self, *, file_id: str, title: str, author: str, created_at: str) -> int:
+        cur = self.c.execute(
+            "INSERT INTO lists(file_id, title, author, created_at) VALUES(?,?,?,?)",
+            (file_id, title, author, created_at))
+        return cur.lastrowid
+
+    def get_list(self, list_id: int) -> dict | None:
+        r = self.c.execute("SELECT * FROM lists WHERE id=?", (list_id,)).fetchone()
+        return dict(r) if r else None
+
+    def get_list_by_file_id(self, file_id: str) -> dict | None:
+        r = self.c.execute("SELECT * FROM lists WHERE file_id=?", (file_id,)).fetchone()
+        return dict(r) if r else None
+
+    def all_lists(self) -> list[dict]:
+        return [dict(r) for r in self.c.execute("SELECT * FROM lists ORDER BY created_at DESC")]
+
+    def list_items(self, list_id: int) -> list[dict]:
+        """Return full entry rows for a list, ordered by position."""
+        rows = [dict(r) for r in self.c.execute(
+            f"SELECT {_BRIEF}, e.file_id, li.position, li.added_at FROM entries e "
+            "JOIN list_items li ON li.entry_id=e.id "
+            "WHERE li.list_id=? ORDER BY li.position, li.added_at", (list_id,))]
+        tg = self.tags_of([r["id"] for r in rows])
+        for r in rows:
+            r["tags"] = tg[r["id"]]
+        return rows
+
+    def add_list_item(self, list_id: int, entry_id: int, added_at: str) -> None:
+        max_pos = self.c.execute(
+            "SELECT COALESCE(MAX(position),0) FROM list_items WHERE list_id=?",
+            (list_id,)).fetchone()[0]
+        self.c.execute(
+            "INSERT OR IGNORE INTO list_items(list_id,entry_id,position,added_at) VALUES(?,?,?,?)",
+            (list_id, entry_id, max_pos + 1, added_at))
+
+    def remove_list_item(self, list_id: int, entry_id: int) -> bool:
+        return self.c.execute(
+            "DELETE FROM list_items WHERE list_id=? AND entry_id=?",
+            (list_id, entry_id)).rowcount > 0
+
+    def clear_list(self, list_id: int) -> list[int]:
+        """Mark all open items done. Returns the entry_ids that were changed."""
+        ids = [r["entry_id"] for r in self.c.execute(
+            "SELECT li.entry_id FROM list_items li "
+            "JOIN entries e ON e.id=li.entry_id "
+            "WHERE li.list_id=? AND e.status NOT IN ('done','archived','rejected')",
+            (list_id,))]
+        if ids:
+            self.c.execute(
+                f"UPDATE entries SET status='done' WHERE id IN ({','.join('?'*len(ids))})", ids)
+        return ids
+
+    def delete_list(self, list_id: int) -> bool:
+        return self.c.execute("DELETE FROM lists WHERE id=?", (list_id,)).rowcount > 0
+
 
     # ----------------------------------------------------------------- oauth
     # Clients, pending requests, codes and tokens share one small key/value table.

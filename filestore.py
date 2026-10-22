@@ -28,6 +28,10 @@ def _new_id() -> str:
     return uuid.uuid4().hex.upper()
 
 
+def _new_list_id() -> str:
+    return "L" + uuid.uuid4().hex.upper()[:31]
+
+
 def _ts_now() -> str:
     return dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds")
 
@@ -101,10 +105,20 @@ class FileStore:
     # ------------------------------------------------ write: patch existing file
 
     def patch(self, file_id: str, changes: dict) -> None:
-        """Patch named frontmatter keys. Always stamps updated."""
-        if "updated" not in changes:
-            changes = {**changes, "updated": _ts_now()}
-        mdfile.patch_entry(self._path(file_id), changes)
+        """Patch frontmatter keys and/or body. Always stamps updated.
+        'body' is routed to patch_body(); everything else goes to patch_entry().
+        Both writes are atomic; body is written first.
+        """
+        path = self._path(file_id)
+        new_body = changes.get("body")
+        fm_changes = {k: v for k, v in changes.items() if k != "body"}
+        if "updated" not in fm_changes:
+            fm_changes["updated"] = _ts_now()
+
+        if new_body is not None:
+            mdfile.patch_body(path, new_body)
+        if fm_changes:
+            mdfile.patch_entry(path, fm_changes)
 
     # ---------------------------------------------------- write: SQLite index
 
@@ -162,6 +176,7 @@ class FileStore:
                     s.create_tag(tag)
                     s.attach_tag(sql_id, tag)
             if any(k in fields for k in ("title", "summary", "body")):
+                # Re-fetch after update so FTS gets the new values.
                 row = s.get_entry(sql_id)
                 if row:
                     s.update_fts(sql_id, row["title"], row.get("summary"), row["body"])
@@ -204,3 +219,42 @@ class FileStore:
         with self.sql.session() as s:
             s.rebuild_fts()
         return count
+
+    # --------------------------------------------------------- list files
+
+    @property
+    def lists_dir(self) -> Path:
+        d = self.data_dir / "lists"
+        d.mkdir(exist_ok=True)
+        return d
+
+    def _list_path(self, file_id: str) -> Path:
+        return self.lists_dir / f"{file_id}.md"
+
+    def _new_list_id(self) -> str:
+        return _new_list_id()
+
+    def write_new_list(self, *, file_id: str, title: str, author: str, created: str) -> None:
+        """Write a brand-new list .md file with empty items."""
+        fm = {
+            "id": file_id,
+            "type": "list",
+            "title": title,
+            "author": author,
+            "created": created,
+            "updated": created,
+            "items": [],
+        }
+        mdfile._atomic_write(self._list_path(file_id), _render_new(fm, ""))
+
+    def patch_list(self, file_id: str, list_id: int) -> None:
+        """Rewrite the items array in the list .md file from SQLite membership."""
+        from storage import SQLiteStore  # already imported via self.sql
+        with self.sql.session() as s:
+            rows = s.list_items(list_id)
+        items = [{"entry": r["file_id"], "added": r.get("added_at", "")} for r in rows
+                 if r.get("file_id")]
+        path = self._list_path(file_id)
+        if path.exists():
+            mdfile.patch_entry(path, {"items": items, "updated": _ts_now()})
+

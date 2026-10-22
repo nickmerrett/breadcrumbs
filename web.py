@@ -37,9 +37,10 @@ label{display:block;font:.85rem system-ui,sans-serif;color:var(--mute);margin:.8
 
 def page(title: str, body: str, *, show_add: bool = True) -> str:
     add = '<a class="add-btn" href="/new" aria-label="Add entry">+</a>' if show_add else ""
+    nav = '<a href="/lists" style="font:.85rem system-ui,sans-serif;color:var(--mute);margin-left:.75rem">Lists</a>'
     return (f'<!doctype html><html lang="en"><meta charset="utf-8">'
             f'<meta name="viewport" content="width=device-width,initial-scale=1"><title>{e(title)}</title>'
-            f"<style>{CSS}</style><main><h1><a href='/'>Breadcrumbs</a>{add}</h1>{body}</main></html>")
+            f"<style>{CSS}</style><main><h1><a href='/'>Breadcrumbs</a>{nav}{add}</h1>{body}</main></html>")
 
 
 def chips(tags: list[str]) -> str:
@@ -191,6 +192,52 @@ def new_form(types: list[str], error: str = "") -> str:
             + f'<button type="submit">Save</button> '
             + f'<a href="/" style="margin-left:.5rem;font:.9rem system-ui,sans-serif">Cancel</a>'
             + '</form>')
+
+
+def list_index(lists: list[dict]) -> str:
+    if not lists:
+        return '<p>No lists yet. Create one from a connected client or the API.</p>'
+    items = "".join(
+        f'<div class="e"><h2><a href="/l/{l["id"]}">{e(l["title"])}</a></h2>'
+        f'<div class="m">by {e(l["author"])} · {l["created_at"][:10]}</div></div>'
+        for l in lists)
+    return f'<nav><a href="/">All entries</a></nav><h2 style="font-size:1.3rem;margin:.2rem 0 1rem">Lists</h2>{items}'
+
+
+def list_view(lst: dict) -> str:
+    items = lst.get("items") or []
+    open_items = [i for i in items if i["status"] not in ("done", "archived", "rejected")]
+    done_items = [i for i in items if i["status"] == "done"]
+
+    def row(item: dict, checked: bool) -> str:
+        chk = "checked" if checked else ""
+        label_style = "text-decoration:line-through;color:var(--mute)" if checked else ""
+        return (
+            f'<form method="post" action="/l/{lst["id"]}/check" style="display:flex;align-items:center;gap:.6rem;padding:.5rem 0;border-top:1px solid var(--rule)">'
+            f'<input type="hidden" name="entry_id" value="{item["id"]}">'
+            f'<input type="checkbox" name="done" value="1" {chk} onchange="this.form.submit()" '
+            f'style="width:1.2rem;height:1.2rem;cursor:pointer">'
+            f'<span style="{label_style}">{e(item["title"])}</span>'
+            f'<span style="margin-left:auto;font:.78rem system-ui,sans-serif;color:var(--mute)">'
+            f'{e(item["type"])}'
+            f'{"  · " + e(item["summary"]) if item.get("summary") else ""}'
+            f'</span>'
+            f'</form>'
+        )
+
+    open_html = "".join(row(i, False) for i in open_items)
+    done_html = "".join(row(i, True) for i in done_items)
+    done_section = (f'<details style="margin-top:1rem"><summary style="font:.85rem system-ui,sans-serif;color:var(--mute);cursor:pointer">'
+                    f'{len(done_items)} done</summary>{done_html}</details>') if done_items else ""
+
+    clear_btn = (f'<form method="post" action="/l/{lst["id"]}/clear" style="display:inline">'
+                 f'<button class="q" style="margin-left:.5rem">Mark all done</button></form>') if open_items else ""
+
+    return (f'<nav><a href="/lists">Lists</a></nav>'
+            f'<h2 style="font-size:1.4rem;margin:.2rem 0">{e(lst["title"])}'
+            f'{clear_btn}</h2>'
+            f'<div class="m">{len(open_items)} open · {len(done_items)} done · by {e(lst["author"])}</div>'
+            f'{open_html}{done_section}')
 
 
 def login(client_name: str, req: str, error: str = "") -> str:

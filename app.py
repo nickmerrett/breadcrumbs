@@ -130,13 +130,15 @@ def create_app(data_dir: str, keys: dict[str, str], public_url: str = "http://lo
     @mcp.tool()
     def search(query: str | None = None, tag: str | None = None, type: str | None = None,
                since: str | None = None, limit: int = 8, semantic: bool = False,
-               due_before: str | None = None) -> list[dict]:
+               due_before: str | None = None, status: str | None = None) -> list[dict]:
         """Find entries. query is keywords; tag filters (a parent tag includes its children, e.g.
         'domain:cooking'); type filters by entry type; since is '7d' or an ISO date. With no query,
         returns the most recent entries. Set semantic=true for meaning-based search when keywords
         are vague or you cannot recall exact wording. due_before filters to entries with a due date
-        on or before that date (ISO date or 'today'). Returns short summaries; use get_entry for full text."""
-        return nb.search(query, tag, type, since, limit, semantic, due_before=due_before)
+        on or before that date (ISO date or 'today'). status filters by lifecycle status (proposed,
+        approved, done, archived, rejected) — by default rejected and archived are hidden.
+        Returns short summaries; use get_entry for full text."""
+        return nb.search(query, tag, type, since, limit, semantic, due_before=due_before, status=status)
 
     @mcp.tool()
     def get_entry(id: int) -> dict:
@@ -185,10 +187,48 @@ def create_app(data_dir: str, keys: dict[str, str], public_url: str = "http://lo
         """Set or clear the due date on an entry. due is an ISO date string (YYYY-MM-DD)
         or null to clear it."""
         try:
-            nb.update_entry(id, due=due or "")
+            nb.update_entry(id, due=due if due else None)
             return {"ok": True, "id": id, "due": due}
         except ValueError as ex:
             return {"ok": False, "error": str(ex)}
+
+    @mcp.tool()
+    def create_list(title: str) -> dict:
+        """Create a new list (e.g. 'Shopping', 'Gift ideas'). Returns the list id.
+        Add entries to it with add_to_list."""
+        try:
+            return nb.create_list(caller(), title)
+        except ValueError as ex:
+            return {"ok": False, "error": str(ex)}
+
+    @mcp.tool()
+    def add_to_list(list_id: int, entry_id: int) -> dict:
+        """Add an existing entry to a list. Use search to find the entry_id first."""
+        try:
+            return nb.add_to_list(caller(), list_id, entry_id)
+        except ValueError as ex:
+            return {"ok": False, "error": str(ex)}
+
+    @mcp.tool()
+    def remove_from_list(list_id: int, entry_id: int) -> dict:
+        """Remove an entry from a list without deleting the entry itself."""
+        return nb.remove_from_list(list_id, entry_id)
+
+    @mcp.tool()
+    def clear_list(list_id: int) -> dict:
+        """Mark all open items in a list as done in one shot. Entries are preserved;
+        their status becomes 'done'. History remains intact."""
+        return nb.clear_list(list_id)
+
+    @mcp.tool()
+    def get_list(list_id: int) -> dict:
+        """Fetch a list and all its current items."""
+        return nb.get_list(list_id) or {"error": "not found"}
+
+    @mcp.tool()
+    def list_lists() -> list[dict]:
+        """Return all lists."""
+        return nb.all_lists()
 
     # ---------------------------------------------------------------- core
     @contextlib.asynccontextmanager
@@ -220,9 +260,9 @@ def create_app(data_dir: str, keys: dict[str, str], public_url: str = "http://lo
     @app.get("/api/search")
     def api_search(q: str | None = None, tag: str | None = None, type: str | None = None,
                    since: str | None = None, limit: int = 10, semantic: bool = False,
-                   offset: int = 0, due_before: str | None = None,
+                   offset: int = 0, due_before: str | None = None, status: str | None = None,
                    agent: str = Depends(current_agent)):
-        return nb.search(q, tag, type, since, limit, semantic, offset, due_before)
+        return nb.search(q, tag, type, since, limit, semantic, offset, due_before, status=status)
 
     @app.get("/api/entries/{eid}")
     def api_get(eid: int, agent: str = Depends(current_agent)):
@@ -263,6 +303,42 @@ def create_app(data_dir: str, keys: dict[str, str], public_url: str = "http://lo
         """Rebuild the SQLite index from .md files on disk. Safe to run at any time."""
         count = nb.reindex()
         return {"reindexed": count}
+
+    # ------------------------------------------------------------ REST lists
+    @app.get("/api/lists")
+    def api_list_lists(agent: str = Depends(current_agent)):
+        return nb.all_lists()
+
+    @app.post("/api/lists")
+    def api_create_list(title: str, agent: str = Depends(current_agent)):
+        try:
+            return nb.create_list(agent, title)
+        except ValueError as ex:
+            raise HTTPException(422, str(ex))
+
+    @app.get("/api/lists/{lid}")
+    def api_get_list(lid: int, agent: str = Depends(current_agent)):
+        lst = nb.get_list(lid)
+        if not lst:
+            raise HTTPException(404, "not found")
+        return lst
+
+    @app.post("/api/lists/{lid}/items")
+    def api_add_item(lid: int, entry_id: int, agent: str = Depends(current_agent)):
+        try:
+            return nb.add_to_list(agent, lid, entry_id)
+        except ValueError as ex:
+            raise HTTPException(422, str(ex))
+
+    @app.delete("/api/lists/{lid}/items/{eid}")
+    def api_remove_item(lid: int, eid: int, agent: str = Depends(current_agent)):
+        return nb.remove_from_list(lid, eid)
+
+    @app.post("/api/lists/{lid}/clear")
+    def api_clear_list(lid: int, agent: str = Depends(current_agent)):
+        return nb.clear_list(lid)
+
+
 
     # ---------------------------------------------------------- OAuth login
     # The SDK serves /.well-known/*, /register, /authorize, /token and /revoke.
@@ -368,6 +444,33 @@ def create_app(data_dir: str, keys: dict[str, str], public_url: str = "http://lo
             status_map = {"archive": "archived", "reject": "rejected", "done": "done"}
             nb.set_status(eid, status_map[do])
         return RedirectResponse(f"/e/{eid}", status_code=303)
+
+    # ---------------------------------------------------------------- Lists UI
+    @app.get("/lists", response_class=HTMLResponse)
+    def ui_lists(agent: str = Depends(current_agent)):
+        return web.page("Lists", web.list_index(nb.all_lists()))
+
+    @app.get("/l/{lid}", response_class=HTMLResponse)
+    def ui_list_view(lid: int, agent: str = Depends(current_agent)):
+        lst = nb.get_list(lid)
+        if not lst:
+            raise HTTPException(404, "not found")
+        return web.page(lst["title"], web.list_view(lst))
+
+    @app.post("/l/{lid}/check", response_class=HTMLResponse)
+    def ui_list_check(lid: int, entry_id: int = Form(...),
+                      done: str = Form(None), agent: str = Depends(current_agent)):
+        # Checkbox ticked = mark done; unticked = reopen (approved)
+        if done:
+            nb.set_status(entry_id, "done")
+        else:
+            nb.set_status(entry_id, "approved")
+        return RedirectResponse(f"/l/{lid}", status_code=303)
+
+    @app.post("/l/{lid}/clear")
+    def ui_list_clear(lid: int, agent: str = Depends(current_agent)):
+        nb.clear_list(lid)
+        return RedirectResponse(f"/l/{lid}", status_code=303)
 
     # Mounted last so the routes above take precedence; its endpoint is /mcp
     app.mount("/", mcp.streamable_http_app())

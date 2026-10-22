@@ -21,7 +21,7 @@ from filestore import FileStore
 
 _EMBED_MODEL = "BAAI/bge-small-en-v1.5"
 
-TYPES = {"recipe", "discovery", "snippet", "dead-end", "howto", "reference", "question", "idea", "link"}
+TYPES = {"recipe", "discovery", "snippet", "dead-end", "howto", "reference", "question", "idea", "link", "task"}
 OUTCOMES = {"worked", "partial", "failed", "untested"}
 STATUSES = {"proposed", "approved", "rejected", "archived", "done"}
 FACETS = {"domain", "tech", "context", "tag"}  # "tag:" is the free-form tier
@@ -272,7 +272,8 @@ class Notebook:
 
     def search(self, query: str | None = None, tag: str | None = None, type: str | None = None,
                since: str | None = None, limit: int = 10, semantic: bool = False,
-               offset: int = 0, due_before: str | None = None) -> list[dict]:
+               offset: int = 0, due_before: str | None = None,
+               status: str | None = None) -> list[dict]:
         with self.fs.sql.session() as s:
             full = None
             if tag:
@@ -295,7 +296,7 @@ class Notebook:
                 if words:
                     match = " OR ".join(f'"{w}"*' for w in words)
             return s.search(match=match, type=t, since=snc, tag=full, limit=lim, offset=off,
-                            due_before=due)
+                            due_before=due, status=status)
 
     def get_entry(self, eid: int) -> dict | None:
         with self.fs.sql.session() as s:
@@ -312,3 +313,64 @@ class Notebook:
     def reindex(self) -> int:
         """Rebuild the SQLite index from .md files on disk."""
         return self.fs.reindex()
+
+    # --------------------------------------------------------------- lists
+
+    def create_list(self, agent: str, title: str) -> dict:
+        if not title.strip():
+            raise ValueError("title is required")
+        file_id = self.fs._new_list_id()
+        now = self._ts()
+        # Write the .md file first.
+        self.fs.write_new_list(file_id=file_id, title=title.strip(), author=agent, created=now)
+        # Index into SQLite.
+        with self.fs.sql.session() as s:
+            list_id = s.insert_list(file_id=file_id, title=title.strip(),
+                                    author=agent, created_at=now)
+        return {"id": list_id, "file_id": file_id, "title": title.strip()}
+
+    def get_list(self, list_id: int) -> dict | None:
+        with self.fs.sql.session() as s:
+            lst = s.get_list(list_id)
+            if not lst:
+                return None
+            lst["items"] = s.list_items(list_id)
+            return lst
+
+    def all_lists(self) -> list[dict]:
+        with self.fs.sql.session() as s:
+            return s.all_lists()
+
+    def add_to_list(self, agent: str, list_id: int, entry_id: int) -> dict:
+        with self.fs.sql.session() as s:
+            if not s.get_list(list_id):
+                raise ValueError("list not found")
+            if not s.get_entry(entry_id):
+                raise ValueError("entry not found")
+            s.add_list_item(list_id, entry_id, self._ts())
+            # Patch the list .md file to record membership.
+            lst = s.get_list(list_id)
+        if lst and lst.get("file_id"):
+            self.fs.patch_list(lst["file_id"], list_id)
+        return {"ok": True, "list_id": list_id, "entry_id": entry_id}
+
+    def remove_from_list(self, list_id: int, entry_id: int) -> dict:
+        with self.fs.sql.session() as s:
+            ok = s.remove_list_item(list_id, entry_id)
+            lst = s.get_list(list_id)
+        if ok and lst and lst.get("file_id"):
+            self.fs.patch_list(lst["file_id"], list_id)
+        return {"ok": ok, "list_id": list_id, "entry_id": entry_id}
+
+    def clear_list(self, list_id: int) -> dict:
+        """Mark all open items in the list as done."""
+        with self.fs.sql.session() as s:
+            changed_ids = s.clear_list(list_id)
+            lst = s.get_list(list_id)
+        # Patch the status in each entry's .md file.
+        for eid in changed_ids:
+            file_id = self.fs.file_id_for(eid)
+            if file_id:
+                self.fs.patch(file_id, {"status": "done"})
+        return {"ok": True, "list_id": list_id, "cleared": len(changed_ids)}
+
