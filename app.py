@@ -259,7 +259,7 @@ def create_app(data_dir: str, keys: dict[str, str], public_url: str = "http://lo
         rows = nb.search(q or None, tag or None, type or None, None, PAGE_SIZE, offset=page * PAGE_SIZE)
         has_prev = page > 0
         has_next = len(rows) == PAGE_SIZE
-        top_tags = [t["name"] for t in nb.list_tags()[:12]]
+        top_tags = [t for t in nb.list_tags() if t["uses"] > 0]
         return web.page("Breadcrumbs", web.home(rows, q, tag, type, page, has_prev, has_next, top_tags=top_tags))
 
     @app.get("/e/{eid}", response_class=HTMLResponse)

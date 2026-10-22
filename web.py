@@ -57,18 +57,49 @@ def card(r: dict) -> str:
             f'<div class="m">{meta}</div>{summ}<div>{chips(r["tags"])}</div></div>')
 
 
+def _group_tags(tags: list[dict]) -> dict[str, list[dict]]:
+    """Group tags by their facet prefix (domain, tech, context, tag), sorted by uses desc."""
+    groups: dict[str, list[dict]] = {}
+    for t in tags:
+        name = t["name"]
+        facet = name.split(":")[0] if ":" in name else "tag"
+        groups.setdefault(facet, []).append(t)
+    # Within each group, highest usage first.
+    for v in groups.values():
+        v.sort(key=lambda t: t["uses"], reverse=True)
+    # Facet display order.
+    order = ["domain", "tech", "context", "tag"]
+    return {f: groups[f] for f in order if f in groups} | {
+        f: groups[f] for f in groups if f not in order
+    }
+
+
 def home(rows: list[dict], q: str, tag: str, type_: str, page: int = 0,
          has_prev: bool = False, has_next: bool = False,
-         top_tags: list[str] | None = None) -> str:
+         top_tags: list[dict] | None = None) -> str:
     heading = "Recent" if not (q or tag or type_) else f"{len(rows)} result{'s' if len(rows) != 1 else ''}"
     types = "".join(f'<a class="chip" href="/?type={t}">{t}</a>' for t in sorted(TYPES))
-    tag_chips = ""
+
+    tag_section = ""
     if top_tags:
-        tag_chips = (' <span style="color:var(--rule)">·</span> '
-                     + "".join(f'<a class="chip" href="/?tag={e(t)}">{e(t)}</a>' for t in top_tags))
+        groups = _group_tags(top_tags)
+        rows_html = ""
+        for facet, items in groups.items():
+            label = facet.capitalize()
+            chip_html = "".join(
+                f'<a class="chip" href="/?tag={e(t["name"])}" title="{t["uses"]} uses">'
+                f'{e(t["name"].split(":", 1)[1] if ":" in t["name"] else t["name"])}</a>'
+                for t in items[:10]
+            )
+            rows_html += (f'<div style="display:flex;align-items:baseline;gap:.4rem;margin:.3rem 0">'
+                          f'<span style="font:.75rem system-ui,sans-serif;color:var(--mute);'
+                          f'min-width:4rem;text-align:right">{label}</span>'
+                          f'<div>{chip_html}</div></div>')
+        tag_section = f'<div style="margin:.6rem 0 .2rem;border-top:1px solid var(--rule);padding-top:.6rem">{rows_html}</div>'
+
     form = (f'<form class="s"><input type="text" name="q" value="{e(q)}" '
             f'placeholder="Search recipes, discoveries, dead ends" aria-label="Search">'
-            f'<button>Search</button></form><div>{types}{tag_chips}</div>')
+            f'<button>Search</button></form><div>{types}</div>{tag_section}')
     empty = "<p>Nothing here yet. Save something from any connected client and it will show up.</p>"
 
     def page_url(p: int) -> str:
