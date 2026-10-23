@@ -15,6 +15,7 @@ from mcp.server.fastmcp import FastMCP
 from mcp.server.transport_security import TransportSecuritySettings
 from pydantic import BaseModel, Field
 
+import watcher
 import web
 from core import Notebook
 from filestore import FileStore
@@ -233,6 +234,7 @@ def create_app(data_dir: str, keys: dict[str, str], public_url: str = "http://lo
     # ---------------------------------------------------------------- core
     @contextlib.asynccontextmanager
     async def lifespan(_app):
+        watcher.start(fs)
         async with mcp.session_manager.run():
             yield
 
@@ -449,6 +451,18 @@ def create_app(data_dir: str, keys: dict[str, str], public_url: str = "http://lo
     @app.get("/lists", response_class=HTMLResponse)
     def ui_lists(agent: str = Depends(current_agent)):
         return web.page("Lists", web.list_index(nb.all_lists()))
+
+    @app.get("/lists/new", response_class=HTMLResponse)
+    def ui_new_list_form(agent: str = Depends(current_agent)):
+        return web.page("New List", web.new_list_form(), show_add=False)
+
+    @app.post("/lists/new")
+    def ui_new_list_submit(title: str = Form(...), agent: str = Depends(current_agent)):
+        try:
+            lst = nb.create_list(agent, title)
+        except ValueError as ex:
+            return HTMLResponse(web.page("New List", web.new_list_form(str(ex)), show_add=False), 422)
+        return RedirectResponse(f"/l/{lst['id']}", status_code=303)
 
     @app.get("/l/{lid}", response_class=HTMLResponse)
     def ui_list_view(lid: int, agent: str = Depends(current_agent)):

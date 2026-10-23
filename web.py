@@ -195,13 +195,28 @@ def new_form(types: list[str], error: str = "") -> str:
 
 
 def list_index(lists: list[dict]) -> str:
-    if not lists:
-        return '<p>No lists yet. Create one from a connected client or the API.</p>'
     items = "".join(
         f'<div class="e"><h2><a href="/l/{l["id"]}">{e(l["title"])}</a></h2>'
         f'<div class="m">by {e(l["author"])} · {l["created_at"][:10]}</div></div>'
         for l in lists)
-    return f'<nav><a href="/">All entries</a></nav><h2 style="font-size:1.3rem;margin:.2rem 0 1rem">Lists</h2>{items}'
+    empty = '<p style="color:var(--mute)">No lists yet.</p>' if not lists else ""
+    new_btn = '<a class="add-btn" href="/lists/new" style="font-size:1rem">+ New list</a>'
+    return (f'<nav><a href="/">All entries</a></nav>'
+            f'<h2 style="font-size:1.3rem;margin:.2rem 0 1rem;display:flex;align-items:center;justify-content:space-between">'
+            f'Lists{new_btn}</h2>'
+            f'{empty}{items}')
+
+
+def new_list_form(error: str = "") -> str:
+    err = f'<p class="p">{e(error)}</p>' if error else ""
+    return (f'<nav><a href="/lists">Lists</a></nav>'
+            f'<h2 style="font-size:1.3rem;margin:.2rem 0">New list</h2>{err}'
+            f'<form method="post" action="/lists/new">'
+            f'<div class="field"><label>Title</label>'
+            f'<input type="text" name="title" placeholder="Shopping, Gift ideas, …" autofocus required></div>'
+            f'<button type="submit">Create list</button> '
+            f'<a href="/lists" style="margin-left:.5rem;font:.9rem system-ui,sans-serif">Cancel</a>'
+            f'</form>')
 
 
 def list_view(lst: dict) -> str:
