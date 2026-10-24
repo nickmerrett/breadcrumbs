@@ -177,9 +177,20 @@ def create_app(data_dir: str, keys: dict[str, str], public_url: str = "http://lo
     def set_status(id: int, status: str) -> dict:
         """Set the lifecycle status of an entry. status must be one of: proposed, approved,
         rejected, archived, done. Use 'done' to complete a task, 'archived' to shelve
-        something, 'rejected' to dismiss it. Cannot be undone via MCP — use the UI."""
+        something, 'rejected' to delete/dismiss it. Cannot be undone via MCP — use the UI."""
         try:
             return {"ok": nb.set_status(id, status), "id": id, "status": status}
+        except ValueError as ex:
+            return {"ok": False, "error": str(ex)}
+
+    @mcp.tool()
+    def delete_entry(id: int) -> dict:
+        """Delete an entry from the notebook (marks it as rejected so it is hidden from search and lists)."""
+        entry = nb.get_entry(id)
+        if not entry:
+            return {"ok": False, "error": "not found"}
+        try:
+            return {"ok": nb.set_status(id, "rejected"), "id": id, "status": "rejected"}
         except ValueError as ex:
             return {"ok": False, "error": str(ex)}
 
@@ -230,6 +241,14 @@ def create_app(data_dir: str, keys: dict[str, str], public_url: str = "http://lo
     def list_lists() -> list[dict]:
         """Return all lists."""
         return nb.all_lists()
+
+    @mcp.tool()
+    def delete_list(list_id: int) -> dict:
+        """Delete a list. Entries that were members of the list are preserved in the notebook."""
+        ok = nb.delete_list(list_id)
+        if not ok:
+            return {"ok": False, "error": "not found"}
+        return {"ok": True, "id": list_id}
 
     # ---------------------------------------------------------------- core
     @contextlib.asynccontextmanager
@@ -287,6 +306,16 @@ def create_app(data_dir: str, keys: dict[str, str], public_url: str = "http://lo
         except ValueError as ex:
             raise HTTPException(422, str(ex))
 
+    @app.delete("/api/entries/{eid}")
+    def api_delete_entry(eid: int, agent: str = Depends(current_agent)):
+        entry = nb.get_entry(eid)
+        if not entry:
+            raise HTTPException(404, "not found")
+        try:
+            return {"ok": nb.set_status(eid, "rejected"), "id": eid, "status": "rejected"}
+        except ValueError as ex:
+            raise HTTPException(422, str(ex))
+
     @app.post("/api/entries/{eid}/verify")
     def api_verify(eid: int, agent: str = Depends(current_agent)):
         return {"ok": nb.verify(eid)}
@@ -339,6 +368,13 @@ def create_app(data_dir: str, keys: dict[str, str], public_url: str = "http://lo
     @app.post("/api/lists/{lid}/clear")
     def api_clear_list(lid: int, agent: str = Depends(current_agent)):
         return nb.clear_list(lid)
+
+    @app.delete("/api/lists/{lid}")
+    def api_delete_list(lid: int, agent: str = Depends(current_agent)):
+        ok = nb.delete_list(lid)
+        if not ok:
+            raise HTTPException(404, "not found")
+        return {"ok": True, "id": lid}
 
 
 
@@ -440,10 +476,10 @@ def create_app(data_dir: str, keys: dict[str, str], public_url: str = "http://lo
 
     @app.post("/e/{eid}/act")
     def ui_act(eid: int, do: str = Form(...), agent: str = Depends(current_agent)):
-        if do == "approve":
+        if do in ("approve", "restore"):
             nb.verify(eid)
-        elif do in ("archive", "done", "reject"):
-            status_map = {"archive": "archived", "reject": "rejected", "done": "done"}
+        elif do in ("archive", "done", "reject", "delete"):
+            status_map = {"archive": "archived", "reject": "rejected", "delete": "rejected", "done": "done"}
             nb.set_status(eid, status_map[do])
         return RedirectResponse(f"/e/{eid}", status_code=303)
 
@@ -485,6 +521,16 @@ def create_app(data_dir: str, keys: dict[str, str], public_url: str = "http://lo
     def ui_list_clear(lid: int, agent: str = Depends(current_agent)):
         nb.clear_list(lid)
         return RedirectResponse(f"/l/{lid}", status_code=303)
+
+    @app.post("/l/{lid}/remove")
+    def ui_list_remove(lid: int, entry_id: int = Form(...), agent: str = Depends(current_agent)):
+        nb.remove_from_list(lid, entry_id)
+        return RedirectResponse(f"/l/{lid}", status_code=303)
+
+    @app.post("/l/{lid}/delete")
+    def ui_list_delete(lid: int, agent: str = Depends(current_agent)):
+        nb.delete_list(lid)
+        return RedirectResponse("/lists", status_code=303)
 
     # Mounted last so the routes above take precedence; its endpoint is /mcp
     app.mount("/", mcp.streamable_http_app())

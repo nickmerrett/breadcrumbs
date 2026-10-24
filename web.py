@@ -22,6 +22,9 @@ textarea{width:100%;resize:vertical}
 button{font:600 .9rem system-ui,sans-serif;padding:.5rem .9rem;border:1px solid var(--acc);background:var(--acc);color:var(--bg);border-radius:4px;cursor:pointer}
 button.q{background:transparent;color:var(--acc)}
 button.danger{border-color:#c0392b;color:#c0392b;background:transparent}
+button.danger:hover{background:#c0392b;color:#fff}
+.del-item-btn{background:transparent;border:none;color:var(--mute);cursor:pointer;font-size:1.1rem;padding:0 .4rem;line-height:1;border-radius:3px}
+.del-item-btn:hover{color:#c0392b}
 :focus-visible{outline:2px solid var(--acc);outline-offset:2px}
 .e{padding:.9rem 0;border-top:1px solid var(--rule)}
 .e h2{font:600 1.1rem Charter,Georgia,serif;margin:0}.e h2 a{text-decoration:none}
@@ -129,16 +132,22 @@ def entry(x: dict) -> str:
     due = f'<div class="m">Due: {e(x["due"])}</div>' if x.get("due") else ""
     edit_link = f'<a href="/e/{x["id"]}/edit" style="font:.85rem system-ui,sans-serif">Edit</a>'
     act_buttons = []
-    if x["status"] != "approved":
-        act_buttons.append(("approve", "Approve and mark verified", ""))
-    if x["status"] != "done":
-        act_buttons.append(("done", "Mark done", ""))
-    act_buttons.append(("archive", "Archive", "q"))
-    act_buttons.append(("reject", "Reject", "danger"))
+    if x["status"] in ("archived", "rejected"):
+        act_buttons.append(("restore", "Restore entry", "", None))
+    else:
+        if x["status"] != "approved" and x["status"] != "done":
+            act_buttons.append(("approve", "Approve and mark verified", "", None))
+        if x["status"] != "done":
+            act_buttons.append(("done", "Mark done", "", None))
+        else:
+            act_buttons.append(("approve", "Reopen", "q", None))
+        act_buttons.append(("archive", "Archive", "q", None))
+        act_buttons.append(("delete", "Delete", "danger", "Delete this entry?"))
     acts = " ".join(
-        f'<form method="post" action="/e/{x["id"]}/act" style="display:inline">'
+        f'<form method="post" action="/e/{x["id"]}/act" style="display:inline"'
+        f'{" onsubmit=\"return confirm(\'" + e(confirm) + "\')\"" if confirm else ""}>'
         f'<input type="hidden" name="do" value="{v}"><button class="{cls}">{label}</button></form>'
-        for v, label, cls in act_buttons)
+        for v, label, cls, confirm in act_buttons)
     return (f'<nav><a href="/">All entries</a> · {edit_link}</nav>'
             f'<h2 style="font-size:1.4rem;margin:.2rem 0">{e(x["title"])}</h2>'
             f'<div class="m">{x["type"]}{outcome} · by {e(x["author"])} · {x["created_at"][:10]} · '
@@ -165,9 +174,16 @@ def edit_form(x: dict) -> str:
             + field("Tags (comma-separated)", "tags", tags_val)
             + field("Source URL", "source_url", x.get("source_url") or "")
             + field("Source context", "source_context", x.get("source_context") or "")
-            + f'<button type="submit">Save changes</button> '
+            + f'<div style="display:flex;align-items:center;gap:.5rem;margin-top:1rem">'
+            + f'<button type="submit">Save changes</button>'
             + f'<a href="/e/{x["id"]}" style="margin-left:.5rem;font:.9rem system-ui,sans-serif">Cancel</a>'
-            + '</form>')
+            + f'</div>'
+            + '</form>'
+            + f'<div style="margin-top:1.5rem;padding-top:1rem;border-top:1px solid var(--rule)">'
+            + f'<form method="post" action="/e/{x["id"]}/act" onsubmit="return confirm(\'Delete this entry?\')">'
+            + f'<input type="hidden" name="do" value="delete">'
+            + f'<button type="submit" class="danger">Delete entry</button></form>'
+            + f'</div>')
 
 
 def new_form(types: list[str], error: str = "") -> str:
@@ -196,8 +212,12 @@ def new_form(types: list[str], error: str = "") -> str:
 
 def list_index(lists: list[dict]) -> str:
     items = "".join(
-        f'<div class="e"><h2><a href="/l/{l["id"]}">{e(l["title"])}</a></h2>'
+        f'<div class="e" style="display:flex;align-items:center;justify-content:space-between">'
+        f'<div><h2><a href="/l/{l["id"]}">{e(l["title"])}</a></h2>'
         f'<div class="m">by {e(l["author"])} · {l["created_at"][:10]}</div></div>'
+        f'<form method="post" action="/l/{l["id"]}/delete" onsubmit="return confirm(\'Delete list {e(l["title"])}?\')" style="display:inline">'
+        f'<button class="del-item-btn" title="Delete list" aria-label="Delete list {e(l["title"])}">✕</button></form>'
+        f'</div>'
         for l in lists)
     empty = '<p style="color:var(--mute)">No lists yet.</p>' if not lists else ""
     new_btn = '<a class="add-btn" href="/lists/new" style="font-size:1rem">+ New list</a>'
@@ -226,18 +246,27 @@ def list_view(lst: dict) -> str:
 
     def row(item: dict, checked: bool) -> str:
         chk = "checked" if checked else ""
-        label_style = "text-decoration:line-through;color:var(--mute)" if checked else ""
+        state_label = "incomplete" if checked else "done"
+        label_style = "text-decoration:line-through;color:var(--mute)" if checked else "color:inherit;text-decoration:none"
+        title_link = f'<a href="/e/{item["id"]}" style="{label_style}">{e(item["title"])}</a>'
         return (
-            f'<form method="post" action="/l/{lst["id"]}/check" style="display:flex;align-items:center;gap:.6rem;padding:.5rem 0;border-top:1px solid var(--rule)">'
+            f'<div style="display:flex;align-items:center;gap:.6rem;padding:.5rem 0;border-top:1px solid var(--rule)">'
+            f'<form method="post" action="/l/{lst["id"]}/check" style="display:flex;align-items:center;margin:0">'
             f'<input type="hidden" name="entry_id" value="{item["id"]}">'
             f'<input type="checkbox" name="done" value="1" {chk} onchange="this.form.submit()" '
+            f'aria-label="Mark {e(item["title"])} as {state_label}" '
             f'style="width:1.2rem;height:1.2rem;cursor:pointer">'
-            f'<span style="{label_style}">{e(item["title"])}</span>'
+            f'</form>'
+            f'{title_link}'
             f'<span style="margin-left:auto;font:.78rem system-ui,sans-serif;color:var(--mute)">'
             f'{e(item["type"])}'
             f'{"  · " + e(item["summary"]) if item.get("summary") else ""}'
             f'</span>'
+            f'<form method="post" action="/l/{lst["id"]}/remove" style="display:inline;margin:0">'
+            f'<input type="hidden" name="entry_id" value="{item["id"]}">'
+            f'<button type="submit" class="del-item-btn" title="Remove from list" aria-label="Remove {e(item["title"])} from list">✕</button>'
             f'</form>'
+            f'</div>'
         )
 
     open_html = "".join(row(i, False) for i in open_items)
@@ -245,12 +274,19 @@ def list_view(lst: dict) -> str:
     done_section = (f'<details style="margin-top:1rem"><summary style="font:.85rem system-ui,sans-serif;color:var(--mute);cursor:pointer">'
                     f'{len(done_items)} done</summary>{done_html}</details>') if done_items else ""
 
-    clear_btn = (f'<form method="post" action="/l/{lst["id"]}/clear" style="display:inline">'
-                 f'<button class="q" style="margin-left:.5rem">Mark all done</button></form>') if open_items else ""
+    actions = []
+    if open_items:
+        actions.append(f'<form method="post" action="/l/{lst["id"]}/clear" style="display:inline">'
+                       f'<button class="q">Mark all done</button></form>')
+    actions.append(f'<form method="post" action="/l/{lst["id"]}/delete" '
+                   f'onsubmit="return confirm(\'Delete list {e(lst["title"])}?\')" style="display:inline">'
+                   f'<button class="danger q">Delete list</button></form>')
+    actions_html = f'<span style="display:flex;gap:.5rem;align-items:center">{" ".join(actions)}</span>'
 
     return (f'<nav><a href="/lists">Lists</a></nav>'
-            f'<h2 style="font-size:1.4rem;margin:.2rem 0">{e(lst["title"])}'
-            f'{clear_btn}</h2>'
+            f'<h2 style="font-size:1.4rem;margin:.2rem 0;display:flex;align-items:center;justify-content:space-between">'
+            f'{e(lst["title"])}'
+            f'{actions_html}</h2>'
             f'<div class="m">{len(open_items)} open · {len(done_items)} done · by {e(lst["author"])}</div>'
             f'{open_html}{done_section}')
 

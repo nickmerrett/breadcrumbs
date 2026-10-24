@@ -12,7 +12,7 @@ Three front doors over the same store:
 |---|---|---|
 | MCP (streamable HTTP) | `/mcp` | Claude chat, Claude Code, any MCP client |
 | REST | `/api/...` (docs at `/docs`) | scripts, n8n, Home Assistant, other agents |
-| Browse UI | `/` | you: read, search, edit, archive |
+| Browse UI | `/` | you: read, search, edit, archive, delete |
 
 ## Run locally
 
@@ -67,7 +67,7 @@ Any other client: send `Authorization: Bearer <key>`, or use its OAuth support.
 
 ## MCP tools
 
-`save_entry`, `search`, `get_entry`, `list_tags`, `mark_verified`.
+`save_entry`, `search`, `get_entry`, `update_entry`, `delete_entry`, `set_status`, `set_due`, `list_tags`, `mark_verified`, `create_list`, `get_list`, `list_lists`, `add_to_list`, `remove_from_list`, `clear_list`, `delete_list`.
 
 The server instructs agents to search before saving, write self-contained entries that make
 sense without the surrounding conversation, and reuse existing tags rather than inventing

@@ -5,6 +5,7 @@ from fastapi.testclient import TestClient
 
 from app import create_app, parse_keys
 from core import Notebook
+from filestore import FileStore
 from storage import SQLiteStore
 
 MCP_HEADERS = {"Accept": "application/json, text/event-stream"}
@@ -12,7 +13,7 @@ MCP_HEADERS = {"Accept": "application/json, text/event-stream"}
 
 @pytest.fixture
 def nb(tmp_path):
-    return Notebook(SQLiteStore(tmp_path / "t.db"))
+    return Notebook(FileStore(tmp_path))
 
 
 @pytest.fixture
@@ -162,6 +163,81 @@ def test_ui_archive_and_edit(client):
     assert client.get("/api/entries/1", headers=auth("K1")).json()["title"] == "Edited"
 
 
+def test_ui_delete_and_restore(client):
+    basic = {"Authorization": "Basic " + base64.b64encode(b"me:K1").decode()}
+    client.post("/api/entries", headers=auth("K1"),
+                json={"title": "To delete", "body": "body", "type": "idea"})
+    # Delete via UI
+    r = client.post("/e/1/act", data={"do": "delete"}, headers=basic, follow_redirects=False)
+    assert r.status_code == 303
+    assert client.get("/api/entries/1", headers=auth("K1")).json()["status"] == "rejected"
+    # Entry page for rejected entry offers restore
+    entry_html = client.get("/e/1", headers=basic).text
+    assert "Restore entry" in entry_html
+    # Restore via UI
+    r2 = client.post("/e/1/act", data={"do": "restore"}, headers=basic, follow_redirects=False)
+    assert r2.status_code == 303
+    assert client.get("/api/entries/1", headers=auth("K1")).json()["status"] == "approved"
+
+
+def test_ui_list_remove_item_and_delete_list(client):
+    basic = {"Authorization": "Basic " + base64.b64encode(b"me:K1").decode()}
+    res = client.post("/api/entries", headers=auth("K1"),
+                      json={"title": "Milk", "body": "Whole milk", "type": "task"})
+    assert res.status_code == 200
+    client.post("/api/lists", headers=auth("K1"), params={"title": "Groceries"})
+    client.post("/api/lists/1/items", headers=auth("K1"), params={"entry_id": 1})
+
+    # List view displays item and remove button
+    lv = client.get("/l/1", headers=basic).text
+    assert "Milk" in lv
+    assert "Remove from list" in lv
+    assert "Delete list" in lv
+
+    # Remove item from list
+    r_rem = client.post("/l/1/remove", data={"entry_id": 1}, headers=basic, follow_redirects=False)
+    assert r_rem.status_code == 303
+    lst = client.get("/api/lists/1", headers=auth("K1")).json()
+    assert len(lst["items"]) == 0
+    # Entry still exists
+    assert client.get("/api/entries/1", headers=auth("K1")).status_code == 200
+
+    # Delete list
+    r_del = client.post("/l/1/delete", headers=basic, follow_redirects=False)
+    assert r_del.status_code == 303
+    assert client.get("/api/lists/1", headers=auth("K1")).status_code == 404
+
+
+def test_rest_delete_entry_and_list(client):
+    client.post("/api/entries", headers=auth("K1"),
+                json={"title": "Delete me", "body": "x", "type": "idea"})
+    client.post("/api/lists", headers=auth("K1"), params={"title": "Temp List"})
+
+    # REST DELETE entry
+    r_del_entry = client.delete("/api/entries/1", headers=auth("K1"))
+    assert r_del_entry.status_code == 200 and r_del_entry.json()["ok"]
+    assert client.get("/api/entries/1", headers=auth("K1")).json()["status"] == "rejected"
+
+    # REST DELETE list
+    r_del_list = client.delete("/api/lists/1", headers=auth("K1"))
+    assert r_del_list.status_code == 200 and r_del_list.json()["ok"]
+    assert client.get("/api/lists/1", headers=auth("K1")).status_code == 404
+
+
+def test_mcp_delete_tools(client):
+    client.post("/api/entries", headers=auth("K1"),
+                json={"title": "MCP entry", "body": "x", "type": "idea"})
+    client.post("/api/lists", headers=auth("K1"), params={"title": "MCP list"})
+
+    del_e = rpc(client, "K1", "tools/call", {"name": "delete_entry", "arguments": {"id": 1}})
+    assert del_e.status_code == 200
+    assert client.get("/api/entries/1", headers=auth("K1")).json()["status"] == "rejected"
+
+    del_l = rpc(client, "K1", "tools/call", {"name": "delete_list", "arguments": {"list_id": 1}})
+    assert del_l.status_code == 200
+    assert client.get("/api/lists/1", headers=auth("K1")).status_code == 404
+
+
 def test_due_before_filter(nb):
     nb.save_entry("a", "Overdue task", "x", "idea", due="2000-01-01")
     nb.save_entry("a", "Future task", "x", "idea", due="2999-01-01")
@@ -242,7 +318,7 @@ def test_mcp_requires_key(client):
 
 def test_mcp_tools_and_author_stamp(client):
     names = {t["name"] for t in rpc(client, "K2", "tools/list").json()["result"]["tools"]}
-    assert names == {"save_entry", "search", "get_entry", "list_tags", "mark_verified"}
+    assert {"save_entry", "search", "get_entry", "list_tags", "mark_verified"}.issubset(names)
     saved = rpc(client, "K2", "tools/call", {"name": "save_entry", "arguments": {
         "title": "Pg index trick", "body": "b", "type": "discovery", "tags": ["tech:postgresql"]}})
     assert saved.status_code == 200

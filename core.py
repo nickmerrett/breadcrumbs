@@ -374,3 +374,16 @@ class Notebook:
                 self.fs.patch(file_id, {"status": "done"})
         return {"ok": True, "list_id": list_id, "cleared": len(changed_ids)}
 
+    def delete_list(self, list_id: int) -> bool:
+        with self.fs.sql.session() as s:
+            lst = s.get_list(list_id)
+            if not lst:
+                return False
+            file_id = lst.get("file_id")
+            ok = s.delete_list(list_id)
+        if ok and file_id:
+            path = self.fs._list_path(file_id)
+            if path.exists():
+                path.unlink()
+        return ok
+
