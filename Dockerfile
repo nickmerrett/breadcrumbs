@@ -1,8 +1,30 @@
-FROM python:3.12-slim
+# Multi-stage build. Stages:
+#   base    - runtime dependencies
+#   test    - runs the pytest suite; the pipeline builds this with `--target test`
+#   runtime - the deployed image (default target)
+#
+# The test stage lives here rather than in the pipeline so that tests run against
+# the same base image and dependency set as the runtime image.
+
+FROM python:3.12-slim AS base
 ENV PYTHONUNBUFFERED=1 PIP_NO_CACHE_DIR=1
 WORKDIR /app
 COPY requirements.txt .
 RUN pip install -r requirements.txt
+
+# ---- test -------------------------------------------------------------------
+# CI gate. `buildah bud --target test` runs this at build time, so a failing
+# suite fails the build. Needs the dev requirements (pytest, httpx) and the test
+# files, which .dockerignore previously excluded.
+FROM base AS test
+COPY requirements-dev.txt .
+RUN pip install -r requirements-dev.txt
+COPY *.py pytest.ini ./
+COPY tests ./tests
+RUN pytest
+
+# ---- runtime ----------------------------------------------------------------
+FROM base AS runtime
 COPY *.py ./
 RUN useradd --create-home app && mkdir /data && chown app /data
 USER app
