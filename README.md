@@ -1,5 +1,5 @@
 # Breadcrumbs
-
+force trigger
 A personal long-term notebook that AI agents and you write to together. Save ideas, recipes,
 discoveries, dead ends, and links — then find them again months or years later by keyword,
 meaning, or tag. Entries are stamped with who saved them, fully searchable, and yours to
