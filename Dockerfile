@@ -12,6 +12,13 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install -r requirements.txt
 
+# Prefetch the embedding model into the image so the app does not pull it from
+# the Hugging Face Hub on every cold start. This makes startup deterministic and
+# offline, and removes the network round-trip (and its memory spike) from the
+# pod's boot path. FASTEMBED_CACHE_PATH is read by fastembed's TextEmbedding.
+ENV FASTEMBED_CACHE_PATH=/opt/fastembed
+RUN python -c "from fastembed import TextEmbedding; TextEmbedding('BAAI/bge-small-en-v1.5')"
+
 # ---- test -------------------------------------------------------------------
 # CI gate. `buildah bud --target test` runs this at build time, so a failing
 # suite fails the build. Needs the dev requirements (pytest, httpx) and the test
@@ -26,8 +33,11 @@ RUN pytest
 # ---- runtime ----------------------------------------------------------------
 FROM base AS runtime
 COPY *.py ./
-RUN useradd --create-home app && mkdir /data && chown app /data
+RUN useradd --create-home app && mkdir /data && chown app /data \
+ && chown -R app:app /opt/fastembed
 USER app
+# The model is baked into the image; never reach for the Hub at runtime.
+ENV HF_HUB_OFFLINE=1
 # /data is the volume mount — entries/*.md live here, index.sqlite is derived
 ENV BREADCRUMBS_DIR=/data
 VOLUME /data
