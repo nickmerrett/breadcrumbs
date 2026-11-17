@@ -149,7 +149,10 @@ class Session:
         if not fields:
             return False
         set_clause = ", ".join(f"{k}=?" for k in fields)
-        params = list(fields.values()) + [eid]
+        # JSON-encode structured values (e.g. `data`) to match the insert path: the column holds
+        # JSON text (get_entry json.loads it back), and sqlite3 cannot bind a dict/list — without
+        # this a PATCH carrying `data` raised InterfaceError and the endpoint returned 500.
+        params = [json.dumps(v) if isinstance(v, (dict, list)) else v for v in fields.values()] + [eid]
         return self.c.execute(
             f"UPDATE entries SET {set_clause} WHERE id=?", params).rowcount > 0
 

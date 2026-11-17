@@ -294,6 +294,23 @@ def test_rest_save_search_export(client):
     assert bad.status_code == 422
 
 
+def test_rest_patch_data_persists(client):
+    """PATCH carrying a `data` object must 200 and persist.
+
+    Regression: the generic column updater bound a raw dict, which sqlite3 cannot encode, so any
+    PATCH with `data` raised InterfaceError and the endpoint returned 500 (the .md file was written
+    but the index update rolled back, leaving reads stale until a reindex).
+    """
+    client.post("/api/entries", headers=auth("K1"),
+                json={"title": "Scanned", "body": "b", "type": "reference",
+                      "data": {"barcode": "9317224404899"}})
+    r = client.patch("/api/entries/1", headers=auth("K1"),
+                     json={"data": {"barcode": "9317224404899", "stockcode": 137673}})
+    assert r.status_code == 200, r.text
+    got = client.get("/api/entries/1", headers=auth("K1")).json()
+    assert got["data"] == {"barcode": "9317224404899", "stockcode": 137673}
+
+
 def test_ui_pages(client):
     client.post("/api/entries", headers=auth("K1"),
                 json={"title": "T <b>", "body": "b", "type": "idea"})
